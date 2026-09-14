@@ -6,7 +6,7 @@ $isHomePage = ($currentScript === 'index.php' || $currentScript === '');
 $navItems = [
     'home' => [
         'label' => '🏠 Home',
-        'url' => '/',
+        'url' => 'index.php',
         'active' => $isHomePage
     ],
 	'rdr2natives' => [
