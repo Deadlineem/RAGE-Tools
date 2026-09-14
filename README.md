@@ -1,31 +1,158 @@
-# RDR2/GTA5 NativeDB's + Tools
+# RAGE Engine NativeDB's + Tools
 
-A comprehensive web-based toolkit for managing and converting Red Dead Redemption 2/Grand Theft Auto 5 native function data, with tools for list conversion and script generation.
+A comprehensive web-based toolkit for exploring, managing, converting, and working with native function data across multiple **RAGE Engine games**.
+
+The project provides searchable NativeDB explorers, list conversion utilities, and script generation tools designed for developers and mod-menu creators working with Rockstar Games titles.
+
+## 🎮 Supported Games
+
+The NativeDB currently supports six RAGE Engine games:
+
+| Game                           | NativeDB    |    Natives |
+| ------------------------------ | ----------- | ---------: |
+| **Red Dead Redemption**        | `rdr.php`   |      3,496 |
+| **Red Dead Redemption 2**      | `rdr2.php` |      7,132 |
+| **Grand Theft Auto IV**        | `gta4.php`  |      2,630 |
+| **Grand Theft Auto V**         | `gta5.php`   |      6,701 |
+| **Midnight Club: Los Angeles** | `mncla.php` |      1,267 |
+| **Max Payne 3**                | `mp3.php`   |      3,813 |
+| **Total**                      |             | **25,039** |
+
+Each NativeDB provides searchable native functions along with available information such as:
+
+* Native names
+* Hashes
+* Namespaces
+* Parameters
+* Return types
+* Comments
+* Build information
+* Game-specific hash information where available
+
+The goal is to provide a centralized NativeDB resource covering multiple generations of Rockstar's **RAGE Engine**.
+
+---
 
 ## 📦 Features
 
-### 📋 NativeDB Explorers (index.php/gta.php)
-Browse and search through all RDR2/GTA5 native functions with a modern, responsive interface. Features live search, namespace filtering, and detailed native information display.
+### 📋 NativeDB Explorers
 
-### 🔄 List Converter (converter.php)
-Convert item lists between multiple formats including JSON, INI, C++, Lua, CSV, PHP arrays, and plain text. Supports importing from URLs or pasted content.
+Browse and search native functions for all supported RAGE Engine games through a modern, responsive interface.
 
-### ⚡ Script Generator (creator.php)
-Generate ready-to-use command classes for YimMenuV2, Helix, HorseMenu, and Chronix mod menus. Supports LoopedCommand, PlayerCommand, and basic Command types.
+NativeDB explorers support:
 
-## 🚀 Installation
+* Live searching
+* Native name searching
+* Hash searching
+* Namespace searching
+* Comment searching
+* Namespace filtering
+* Detailed native information
+* Parameter information
+* Return types
+* Native signatures
+* Native hash copying
+* Complete native copying with parameters
+* Signature-only copying
+* Pagination
+* Parameter editing before copying
+* Custom parameter values
 
-### 1. Database Setup (Optional)
-Note: If you do NOT want to use the databases, set `define('USE_DATABASE', false);` in index.php/gta.php
-1. Locate the `rdr3_nativedb_detailed.sql` & `gta5_nativedb_detailed.sql` files in the repository
-2. Import them into your MySQL database using phpMyAdmin or command line:
-```bash
-mysql -u your_username -p your_database < rdr3_nativedb_detailed.sql
+Each game has its own dedicated NativeDB page while sharing the same core functionality.
+
+### 🔄 List Converter — `converter.php`
+
+Convert lists between multiple formats without manually rewriting them.
+
+The converter supports importing lists from either URLs or pasted content.
+
+#### Supported Input Formats
+
+* URL
+* JSON
+* INI
+* C++
+* Lua
+* Plain Text
+
+#### Supported Output Formats
+
+* Plain Text (`.txt`)
+* JSON (`.json`)
+* INI (`.ini`)
+* Lua (`.lua`)
+* C++ Array (`.cpp`)
+* CSV (`.csv`)
+* PHP Array (`.php`)
+
+Example JSON input:
+
+```json
+{
+    "items": [
+        "item1",
+        "item2",
+        "item3"
+    ]
+}
 ```
-This will create the `rdr3_nativedb` & `gta5_nativedb` databases with all native function data pre-populated.
 
-### 2. Configuration
-Edit the database credentials in `assets/php/connect.php` (No need to fill out table names, it fetches them for you):
+The converter can be useful for converting native lists, ped lists, vehicle lists, object hashes, and other development data.
+
+### ⚡ Script Generator — `creator.php`
+
+Generate ready-to-use command classes for supported mod-menu codebases.
+
+Available command templates include:
+
+* Looped Command
+* Basic Command
+* Player Command
+* Vehicle Command
+
+The generator allows you to specify command information, required includes, and custom implementation code before generating the final source.
+
+---
+
+# 🚀 Installation
+
+## 1. Database Setup
+
+NativeDB database usage is optional.
+
+If you do **not** want to use the databases, set:
+
+```php
+define('USE_DATABASE', false);
+```
+
+in the applicable NativeDB PHP page.
+
+If you are using the databases:
+
+1. Locate the NativeDB `.sql` files included with the repository.
+2. Import the database for the game you want to use.
+3. Repeat for each game database you want to host.
+
+Example:
+
+```bash
+mysql -u your_username -p your_database < rdr_nativedb.sql
+```
+
+The imported database contains the native function information used by the corresponding NativeDB explorer.
+
+> **Note:** Database filenames may vary depending on the version of the NativeDB data included with the repository.
+
+---
+
+## 2. Database Configuration
+
+Edit the database credentials in:
+
+```text
+assets/php/connect.php
+```
 
 ```php
 define('DB_HOST', 'localhost');
@@ -34,62 +161,237 @@ define('DB_PASS', 'your_password');
 define('DB_CHARSET', 'utf8mb4');
 ```
 
-### 3. Web Server Setup
-1. Upload all files to your web server (except for .sql files, unless you want to)
-2. Ensure your server meets the requirements:
-   - PHP 7.4 or higher
-   - MySQL/MariaDB
-   - PDO extension enabled
-   - `allow_url_fopen` enabled (for URL imports in converter)
+There is no need to manually configure individual table names if the included database connection system handles the game/database selection.
 
-### 4. File Permissions
-Ensure the web server has read access to the PHP files and write access to any temporary directories if needed.
+---
 
-## 📖 Usage Guide
+## 3. Web Server Setup
 
-### NativeDB Explorer (index.php)
-1. **Search**: Type in the search box to filter natives by name, namespace, hash, or comment
-2. **Filter**: Use the namespace dropdown to view natives from a specific namespace
-3. **View Details**: Click any native in the list to see its full information including parameters, return type, and comments
-4. **Copy**: Use the action buttons to copy hashes or complete Namespace::Native(parameter) combinations
+Upload the project files to your web server.
 
-### List Converter (converter.php)
-1. **Input**: Paste your list or provide a URL (supports .cpp, .lua, .json, .ini, .txt)
-2. **Select Format**: Choose the input format or use "Auto Detect"
-3. **Choose Output**: Select your desired output format
-4. **Convert**: Click the Convert button
-5. **Copy/Download**: Use the Copy or Download buttons to save your converted list
+### Requirements
 
-**Supported Input Formats:**
-- URL (auto-detects content type)
-- JSON (`{"items": ["item1", "item2"]}`)
-- INI (`[Section]` key=value)
-- C++ (`namespace::function` or `object->method`)
-- Lua (`key = "value"` or table assignments)
-- Plain Text (one item per line)
+* PHP 7.4 or higher
+* MySQL/MariaDB
+* PDO extension
+* PDO MySQL driver
+* `allow_url_fopen` enabled for URL imports in the List Converter
 
-**Supported Output Formats:**
-- Plain Text (.txt)
-- JSON (.json)
-- INI (.ini)
-- Lua (.lua)
-- C++ Array (.cpp)
-- CSV (.csv)
-- PHP Array (.php)
+The `.sql` files do not need to be uploaded to the public web directory.
 
-### Script Generator (creator.php)
-1. **Choose Template**: Select a template (Looped Command, Basic Command, Player Command, Vehicle Command)
-2. **Fill Details**:
-   - Command Name: The internal command ID (e.g., `godmode`)
-   - Display Name: User-facing name (e.g., "God Mode")
-   - Description: Brief description of what the command does
-   - Command Prefix: Optional prefix (e.g., `toggle` + `godmode` = `togglegodmode`)
-3. **Select Includes**: Add the required header files for your command
-4. **Add Custom Code**: Write your implementation code for the OnTick/OnCall method
-5. **Generate**: Click the Generate button
-6. **Copy/Download**: Copy or Download the generated output code and add it to your project
+---
 
-**Generated Code Structure:**
+## 4. File Permissions
+
+The web server must have read access to the PHP, CSS, JavaScript, and other application files.
+
+If any feature requires temporary files or writable directories, ensure the web server has the appropriate write permissions.
+
+---
+
+# 📖 Usage Guide
+
+## NativeDB Explorer
+
+Choose the game you want to work with and open its corresponding NativeDB page.
+
+### Search
+
+Enter a native name, namespace, hash, or keyword from a native's comments.
+
+For example:
+
+```text
+GET_PLAYER
+```
+
+or:
+
+```text
+PLAYER
+```
+
+or a native hash.
+
+The search interface updates the native list without requiring a full page reload.
+
+### Namespace Filtering
+
+Use the namespace dropdown to restrict results to a specific namespace.
+
+This is especially useful when searching large NativeDBs such as RDR2 or GTA5.
+
+### View Native Details
+
+Select a native to view its available information, including:
+
+* Namespace
+* Native name
+* Hash
+* Return type
+* Parameters
+* Comments
+* Build information
+* Additional game-specific hashes
+
+### Copy Native Hash
+
+Use the hash copy action to copy the native hash directly to your clipboard.
+
+### Copy Native With Parameters
+
+Copy the complete native call including its parameters.
+
+Example:
+
+```cpp
+PLAYER::GET_PLAYER_PED_SCRIPT_INDEX(player)
+```
+
+### Copy Native Signature
+
+Copy the native's type signature for use when implementing the function.
+
+Example:
+
+```cpp
+PLAYER::GET_PLAYER_PED_SCRIPT_INDEX(Player player)
+```
+
+### Custom Parameters
+
+Where supported, parameter values can be edited before copying the generated native call.
+
+This makes it possible to quickly create a ready-to-use native invocation without manually replacing every parameter.
+
+---
+
+# 🔄 List Converter
+
+Open:
+
+```text
+converter.php
+```
+
+### 1. Input
+
+Paste your list into the input field or provide a URL.
+
+Supported sources include:
+
+* `.cpp`
+* `.lua`
+* `.json`
+* `.ini`
+* `.txt`
+* Other supported text-based formats
+
+### 2. Select Input Format
+
+Choose the appropriate format or use:
+
+```text
+Auto Detect
+```
+
+### 3. Select Output Format
+
+Choose the format you want to generate.
+
+### 4. Convert
+
+Click **Convert** to generate the converted list.
+
+### 5. Copy or Download
+
+Use the available actions to copy the converted data or download it as a file.
+
+---
+
+# ⚡ Script Generator
+
+Open:
+
+```text
+creator.php
+```
+
+## 1. Choose a Template
+
+Select the command type you want to generate:
+
+* Looped Command
+* Basic Command
+* Player Command
+* Vehicle Command
+
+## 2. Fill In Command Details
+
+### Command Name
+
+The internal command identifier.
+
+Example:
+
+```text
+godmode
+```
+
+### Display Name
+
+The name displayed to the user.
+
+Example:
+
+```text
+God Mode
+```
+
+### Description
+
+A short description of what the command does.
+
+### Command Prefix
+
+An optional prefix can be used to construct command names.
+
+For example:
+
+```text
+toggle
+```
+
+combined with:
+
+```text
+godmode
+```
+
+can produce:
+
+```text
+togglegodmode
+```
+
+## 3. Select Includes
+
+Add the header files required by your implementation.
+
+## 4. Add Custom Code
+
+Enter the code that should be placed inside the generated command's implementation.
+
+## 5. Generate
+
+Click **Generate** to create the command source.
+
+## 6. Copy or Download
+
+Copy the generated source code or download it for use in your project.
+
+### Example Generated Code
+
 ```cpp
 #include "core/commands/LoopedCommand.hpp"
 #include "game/backend/Self.hpp"
@@ -115,46 +417,148 @@ namespace YimMenu::Features
 }
 ```
 
-## 🎯 Supported Mod Menus
+---
 
-The Script Generator creates code compatible with:
-- **YimMenuV2** - YimMenu's updated codebase for GTA5 Enhanced
-- **Helix** - RDR2 Open Source/Updated Mod Menu Based off YimMenuV2 + HorseMenu (Terminus)
-- **HorseMenu (Terminus)** - RDR2 Open Source mod menu based off of YimMenuV2
-- **ChronixV2** - Alternative YimMenuV2 mod menu for GTA5 Enhanced
+# 🎯 Supported Mod Menus
 
-## 💡 Tips
+The Script Generator currently supports code generation for:
 
-- Use the NativeDB Explorer to find specific native functions you want to implement
-- Copy the full signature from the NativeDB to use in your script
-- The List Converter is perfect for converting ped lists, vehicle lists, or object hashes between formats
-- Use the Script Generator to quickly scaffold new features for your mod menu
+* **YimMenuV2** — YimMenu's updated codebase for GTA5 Enhanced
+* **Helix** — RDR2 open-source/updated mod menu based on YimMenuV2 and HorseMenu
+* **HorseMenu (Terminus)** — RDR2 open-source mod menu based on YimMenuV2
+* **ChronixV2** — Alternative YimMenuV2 mod menu for GTA5 Enhanced
 
-## 🔧 Troubleshooting
+Additional mod-menu templates and codebases may be added in the future.
 
-### Database Connection Failed
-- Verify your database credentials in the config section
-- Ensure the database server is running
-- Check that the `rdr3_nativedb` database exists with the imported data
+---
 
-### Converter URL Import Fails
-- Ensure `allow_url_fopen` is enabled in php.ini
-- Check if the URL is accessible from your server
-- Verify the URL content is in a supported format
+# 💡 Tips
 
-### Script Generator Output Issues
-- Ensure all required fields are filled (Command Name and Display Name are required)
-- Check that the custom code doesn't contain syntax errors
-- Verify the selected includes match your code requirements
+* Use the NativeDB Explorer to quickly locate natives by name, hash, namespace, or comment.
+* Copy the complete native signature when implementing a native in your project.
+* Use the parameter information provided by the NativeDB when constructing native calls.
+* Use the custom parameter editor to quickly generate calls with specific values.
+* The List Converter is useful for converting ped, vehicle, object, native, and other hash lists between formats.
+* Use the Script Generator to quickly scaffold new features for supported mod-menu projects.
+* Each supported game has its own NativeDB while sharing the same overall toolkit.
+* When working across different RAGE Engine games, always verify that a native exists in the NativeDB for the specific game you are targeting.
 
-## 📄 License
+---
 
-This project is for educational purposes only. Use responsibly and in accordance with Rockstar Games' terms of service.
+# 📊 NativeDB Coverage
 
-## ⚠️ Redistribution
+The project currently contains **25,039 native functions** across six supported RAGE Engine games.
 
-You are free to fork and contribute to this repository as well as redistribute it as your own and make changes, all that is asked is that you **PLEASE keep the project FREE + OPEN SOURCED..  There is no official branding or copyrights/trademarks involved in this project, however, crediting this repository if you decide to redistribute this would be a generous thing to do.**
+```text
+Red Dead Redemption          3,496
+Red Dead Redemption 2        7,132
+Grand Theft Auto IV          2,630
+Grand Theft Auto V           6,701
+Midnight Club: Los Angeles   1,267
+Max Payne 3                  3,813
+────────────────────────────────
+Total                       25,039
+```
 
-## 🤝 Contributing
+This collection brings native information from multiple Rockstar titles together into a single web-based toolkit.
 
-Found a bug or want to add a feature? Feel free to submit a pull request or open an issue on the repository.
+---
+
+# 🔧 Troubleshooting
+
+## Database Connection Failed
+
+Check the following:
+
+* Database credentials in `assets/php/connect.php`
+* MySQL/MariaDB is running
+* The required database has been imported
+* The database user has permission to access the database
+* PHP PDO is enabled
+* The PDO MySQL driver is installed
+
+## NativeDB Is Empty
+
+Verify that the correct NativeDB database has been imported for the game you are trying to use.
+
+Each game has its own native dataset.
+
+## Search Is Not Working
+
+Check:
+
+* PHP errors
+* Database connectivity
+* Browser developer-console errors
+* That the native database contains records
+* That JavaScript is loading correctly
+
+## Converter URL Import Fails
+
+Verify:
+
+* `allow_url_fopen` is enabled
+* The URL is publicly accessible
+* The server can reach the URL
+* The content is in a supported format
+
+If URL importing is unavailable, paste the content directly into the converter.
+
+## Script Generator Output Issues
+
+Make sure:
+
+* Required fields are filled in
+* Command Name is provided
+* Display Name is provided
+* Required includes are selected
+* Custom code does not contain syntax errors
+* The selected template matches the mod-menu codebase you are targeting
+
+---
+
+# 📄 License
+
+This project is for **educational purposes only**.
+
+Use responsibly and in accordance with Rockstar Games' applicable terms of service.
+
+---
+
+# ⚠️ Redistribution
+
+You are free to fork, modify, contribute to, and redistribute this repository as your own project.
+
+All that is asked is that you **PLEASE keep the project FREE + OPEN SOURCED**.
+
+There is no official Rockstar Games branding or copyrighted/trademarked material intended to be claimed as part of this project.
+
+If you redistribute this project or create a derivative work, crediting this repository and its contributors would be greatly appreciated.
+
+---
+
+# 🤝 Contributing
+
+Found a bug, incorrect native, missing data, or want to add a feature?
+
+Feel free to:
+
+* Open an issue
+* Submit a pull request
+* Improve existing tools
+* Add NativeDB support
+* Improve NativeDB data
+* Add additional game support
+* Improve converter functionality
+* Add new script-generator templates
+* Improve performance or usability
+
+Contributions that expand support for additional **RAGE Engine games** are especially welcome.
+
+---
+
+## ⭐ Project Goal
+
+The long-term goal of this project is to provide a centralized, free, open-source toolkit for working with **RAGE Engine native functions and development data across Rockstar Games titles**.
+
+From classic RAGE Engine releases to newer games, the project aims to make native research, list manipulation, and mod-menu development easier from a single location.
