@@ -142,7 +142,8 @@ function generateCommandCode($type, $className, $commandId, $displayName, $descr
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>Script Generator - Tools</title>
+    <title>Script Generator</title>
+	<link rel="icon" type="image/png" href="assets/images/gen.png">
     <style>
         /* Reset and base */
         * {

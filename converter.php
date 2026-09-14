@@ -15,7 +15,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'convert') {
     }
     
     try {
-        // Parse input based on format
         $items = parseInput($input, $inputFormat);
         
         if (empty($items)) {
@@ -23,7 +22,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'convert') {
             exit;
         }
         
-        // Convert to requested output format
         $output = convertOutput($items, $outputFormat);
         
         echo json_encode([
@@ -38,11 +36,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'convert') {
     exit;
 }
 
-// Parse input from various formats
 function parseInput($input, $format) {
     $items = [];
     
-    // Try to detect format if auto
     if ($format === 'auto') {
         $format = detectFormat($input);
     }
@@ -50,19 +46,14 @@ function parseInput($input, $format) {
     switch ($format) {
         case 'url':
             return parseUrl($input);
-            
         case 'json':
             return parseJson($input);
-            
         case 'ini':
             return parseIni($input);
-            
         case 'cpp':
             return parseCpp($input);
-            
         case 'lua':
             return parseLua($input);
-            
         case 'txt':
         default:
             return parseTxt($input);
@@ -72,12 +63,10 @@ function parseInput($input, $format) {
 function detectFormat($input) {
     $input = trim($input);
     
-    // Check if it's a URL
     if (filter_var($input, FILTER_VALIDATE_URL)) {
         return 'url';
     }
     
-    // Check if it's JSON
     if (strpos($input, '{') === 0 || strpos($input, '[') === 0) {
         json_decode($input);
         if (json_last_error() === JSON_ERROR_NONE) {
@@ -85,17 +74,14 @@ function detectFormat($input) {
         }
     }
     
-    // Check if it's INI-like format
     if (preg_match('/^\[.*\]$/m', $input)) {
         return 'ini';
     }
     
-    // Check if it's C++ format (contains :: or ->)
     if (preg_match('/::|->/', $input)) {
         return 'cpp';
     }
     
-    // Check if it's Lua format
     if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*\{/m', $input)) {
         return 'lua';
     }
@@ -109,7 +95,6 @@ function parseUrl($url) {
         throw new Exception("Failed to fetch URL: " . $url);
     }
     
-    // Detect format of the fetched content
     $format = detectFormat($content);
     return parseInput($content, $format);
 }
@@ -122,9 +107,7 @@ function parseJson($json) {
     
     $items = [];
     
-    // Handle different JSON structures
     if (isset($data['items']) && is_array($data['items'])) {
-        // Format: {"items": ["item1", "item2"]}
         foreach ($data['items'] as $item) {
             if (is_array($item) && isset($item['name'])) {
                 $items[] = ['name' => $item['name'], 'hash' => $item['hash'] ?? ''];
@@ -133,7 +116,6 @@ function parseJson($json) {
             }
         }
     } else if (isset($data['data']) && is_array($data['data'])) {
-        // Format: {"data": [{"name": "item1", "hash": "0x123"}]}
         foreach ($data['data'] as $item) {
             if (is_array($item) && isset($item['name'])) {
                 $items[] = ['name' => $item['name'], 'hash' => $item['hash'] ?? ''];
@@ -142,7 +124,6 @@ function parseJson($json) {
             }
         }
     } else if (isset($data['peds']) && is_array($data['peds'])) {
-        // RDR3 Discoveries format
         foreach ($data['peds'] as $key => $value) {
             if (is_array($value) && isset($value['name'])) {
                 $items[] = ['name' => $value['name'], 'hash' => $key];
@@ -151,7 +132,6 @@ function parseJson($json) {
             }
         }
     } else {
-        // Try to extract any array
         foreach ($data as $key => $value) {
             if (is_array($value) && isset($value['name'])) {
                 $items[] = ['name' => $value['name'], 'hash' => $value['hash'] ?? $key];
@@ -171,7 +151,6 @@ function parseJson($json) {
 function parseIni($ini) {
     $lines = explode("\n", $ini);
     $items = [];
-    $currentSection = '';
     $currentItems = [];
     
     foreach ($lines as $line) {
@@ -179,24 +158,20 @@ function parseIni($ini) {
         if (empty($line) || $line[0] === ';' || $line[0] === '#') continue;
         
         if (preg_match('/^\[(.*?)\]$/', $line, $matches)) {
-            // New section
             if (!empty($currentItems)) {
                 foreach ($currentItems as $item) {
                     $items[] = ['name' => $item, 'hash' => ''];
                 }
                 $currentItems = [];
             }
-            $currentSection = $matches[1];
         } else if (strpos($line, '=') !== false) {
             list($key, $value) = explode('=', $line, 2);
             $key = trim($key);
             $value = trim($value);
             
-            // GTAV ObjectList.ini format: "hash = name"
             if (preg_match('/^0x[a-fA-F0-9]+$/', $key)) {
                 $items[] = ['name' => $value, 'hash' => $key];
             } else {
-                // Generic INI format
                 if (!empty($value)) {
                     $items[] = ['name' => $value, 'hash' => $key];
                 } else {
@@ -204,12 +179,10 @@ function parseIni($ini) {
                 }
             }
         } else if (!empty($line)) {
-            // Simple list item
             $currentItems[] = $line;
         }
     }
     
-    // Add remaining items
     foreach ($currentItems as $item) {
         $items[] = ['name' => $item, 'hash' => ''];
     }
@@ -224,20 +197,13 @@ function parseCpp($cpp) {
     foreach ($lines as $line) {
         $line = trim($line);
         
-        // Match patterns like: namespace::Name, or Name->Method
         if (preg_match('/([a-zA-Z_][a-zA-Z0-9_]*)\s*::\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*\([^)]*\))?)/', $line, $matches)) {
-            $name = $matches[1] . '::' . $matches[2];
-            $items[] = ['name' => $name, 'hash' => ''];
+            $items[] = ['name' => $matches[1] . '::' . $matches[2], 'hash' => ''];
         } else if (preg_match('/([a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\s*\([^)]*\))?)/', $line, $matches)) {
-            $name = $matches[1] . '->' . $matches[2];
-            $items[] = ['name' => $name, 'hash' => ''];
-        } else if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*\s*\(/', $line)) {
-            // Function declaration
-            if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/', $line, $matches)) {
-                $items[] = ['name' => $matches[1] . '()', 'hash' => ''];
-            }
+            $items[] = ['name' => $matches[1] . '->' . $matches[2], 'hash' => ''];
+        } else if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/', $line, $matches)) {
+            $items[] = ['name' => $matches[1] . '()', 'hash' => ''];
         } else if (!empty($line) && !preg_match('/^\/\//', $line) && !preg_match('/^\/\*/', $line)) {
-            // Simple identifier
             if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)$/', $line)) {
                 $items[] = ['name' => $line, 'hash' => ''];
             }
@@ -255,20 +221,15 @@ function parseLua($lua) {
         $line = trim($line);
         if (empty($line) || $line[0] === '-' || $line[0] === '#') continue;
         
-        // Match table assignments: key = "value"
         if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*["\']([^"\']*)["\']/', $line, $matches)) {
             $items[] = ['name' => $matches[2], 'hash' => $matches[1]];
         } else if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*([0-9a-fA-Fx]+)/', $line, $matches)) {
-            // key = hash or number
             $items[] = ['name' => $matches[1], 'hash' => $matches[2]];
         } else if (preg_match('/^["\']([^"\']*)["\']\s*=\s*([0-9a-fA-Fx]+)/', $line, $matches)) {
-            // "name" = hash
             $items[] = ['name' => $matches[1], 'hash' => $matches[2]];
         } else if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\{/', $line, $matches)) {
-            // Table start
             $items[] = ['name' => $matches[1], 'hash' => ''];
         } else if (!empty($line) && !preg_match('/^--/', $line) && !preg_match('/^local/', $line)) {
-            // Try to extract quoted strings
             if (preg_match('/["\']([^"\']*)["\']/', $line, $matches)) {
                 $items[] = ['name' => $matches[1], 'hash' => ''];
             } else if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)$/', $line)) {
@@ -288,7 +249,6 @@ function parseTxt($txt) {
         $line = trim($line);
         if (empty($line) || $line[0] === '#' || $line[0] === ';' || $line[0] === '/') continue;
         
-        // Try to extract hash and name
         if (preg_match('/^(0x[a-fA-F0-9]+)\s+["\']?([^"\']+)["\']?/', $line, $matches)) {
             $items[] = ['name' => trim($matches[2]), 'hash' => $matches[1]];
         } else if (preg_match('/^["\']?([^"\']+)["\']?\s*[=:]\s*(0x[a-fA-F0-9]+)/', $line, $matches)) {
@@ -296,7 +256,6 @@ function parseTxt($txt) {
         } else if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*[=:]\s*([0-9a-fA-Fx]+)/', $line, $matches)) {
             $items[] = ['name' => trim($matches[1]), 'hash' => $matches[2]];
         } else if (!empty($line)) {
-            // Just a plain item name
             $items[] = ['name' => $line, 'hash' => ''];
         }
     }
@@ -308,7 +267,6 @@ function convertOutput($items, $format) {
     switch ($format) {
         case 'json':
             return json_encode(['items' => $items, 'count' => count($items)], JSON_PRETTY_PRINT);
-            
         case 'ini':
             $output = "; Converted List - Generated " . date('Y-m-d H:i:s') . "\n";
             foreach ($items as $item) {
@@ -319,7 +277,6 @@ function convertOutput($items, $format) {
                 }
             }
             return $output;
-            
         case 'lua':
             $output = "-- Converted List - Generated " . date('Y-m-d H:i:s') . "\n";
             $output .= "local items = {\n";
@@ -333,7 +290,6 @@ function convertOutput($items, $format) {
             $output .= "}\n";
             $output .= "return items";
             return $output;
-            
         case 'cpp':
             $output = "// Converted List - Generated " . date('Y-m-d H:i:s') . "\n";
             $output .= "const char* itemList[] = {\n";
@@ -342,14 +298,12 @@ function convertOutput($items, $format) {
             }
             $output .= "};\n";
             return $output;
-            
         case 'csv':
             $output = "Name,Hash\n";
             foreach ($items as $item) {
                 $output .= '"' . addslashes($item['name']) . '",' . $item['hash'] . "\n";
             }
             return $output;
-            
         case 'php':
             $output = "<?php\n// Converted List - Generated " . date('Y-m-d H:i:s') . "\n";
             $output .= "return [\n";
@@ -362,7 +316,6 @@ function convertOutput($items, $format) {
             }
             $output .= "];\n";
             return $output;
-            
         case 'txt':
         default:
             $output = "";
@@ -376,15 +329,14 @@ function convertOutput($items, $format) {
             return $output;
     }
 }
-
-// If not an AJAX request, display the HTML page
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>List Converter - Tools</title>
+    <title>List Converter</title>
+	<link rel="icon" type="image/png" href="assets/images/convert.png">
     <style>
         * {
             margin: 0;
@@ -393,25 +345,39 @@ function convertOutput($items, $format) {
         }
         
         :root {
-            --bg-primary: #0a0e1a;
-            --bg-secondary: #111827;
-            --bg-card: #1a233a;
-            --bg-hover: #24304a;
-            --bg-detail: #0f1525;
-            --bg-nav: #0d1322;
-            --text-primary: #e8edf5;
-            --text-secondary: #8a9bb5;
-            --text-muted: #5a6b85;
+            /* Core purple theme */
+            --accent: #a78bfa;
+            --accent-hover: #b9a1ff;
+            --accent-dim: #8b6ee0;
+            --accent-glow: rgba(167, 139, 250, 0.12);
+            --accent-glow-strong: rgba(167, 139, 250, 0.25);
+            --accent-border: rgba(167, 139, 250, 0.35);
+            --accent-icon-bg: rgba(167, 139, 250, 0.1);
+            
+            /* Backgrounds derived from purple base */
+            --bg-primary: #0b0817;
+            --bg-secondary: #130f24;
+            --bg-card: #1a1530;
+            --bg-hover: #241d42;
+            --bg-nav: #100c1f;
+            
+            /* Text */
+            --text-primary: #ede9fe;
+            --text-secondary: #a99fc4;
+            --text-muted: #6e6390;
             --text-accent: #a78bfa;
-            --accent: #6c8cff;
-            --accent-hover: #5a7ae0;
-            --accent-glow: rgba(108, 140, 255, 0.15);
-            --border-color: #2a3a5a;
+            
+            /* Borders */
+            --border-color: #2c2348;
+            --border-hover: #3d3162;
+            
+            /* Status */
             --success: #4ade80;
             --warning: #fbbf24;
             --danger: #f87171;
+            
             --radius: 12px;
-            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
             --nav-height: 50px;
         }
         
@@ -423,7 +389,7 @@ function convertOutput($items, $format) {
             overflow: auto;
         }
         
-        /* Navigation - Fixed dropdown behavior */
+        /* Navigation */
         .navbar {
             background: var(--bg-nav);
             border-bottom: 1px solid var(--border-color);
@@ -433,8 +399,7 @@ function convertOutput($items, $format) {
             align-items: center;
             justify-content: space-between;
             flex-shrink: 0;
-            position: sticky;
-            top: 0;
+            position: relative;
             z-index: 100;
         }
         
@@ -484,10 +449,9 @@ function convertOutput($items, $format) {
         
         .nav-links a.active {
             background: var(--accent);
-            color: white;
+            color: #0b0817;
         }
         
-        /* Dropdown - Fixed hover behavior */
         .nav-dropdown {
             position: relative;
         }
@@ -510,16 +474,8 @@ function convertOutput($items, $format) {
             pointer-events: none;
         }
         
-        /* Show dropdown on hover of the parent li */
         .nav-dropdown:hover .dropdown-menu,
-        .nav-dropdown:focus-within .dropdown-menu {
-            opacity: 1;
-            visibility: visible;
-            transform: translateY(0);
-            pointer-events: auto;
-        }
-        
-        /* Keep dropdown visible when hovering over the menu itself */
+        .nav-dropdown:focus-within .dropdown-menu,
         .nav-dropdown .dropdown-menu:hover {
             opacity: 1;
             visibility: visible;
@@ -530,10 +486,8 @@ function convertOutput($items, $format) {
         .nav-dropdown .dropdown-menu a {
             padding: 8px 16px;
             color: var(--text-secondary);
-            text-decoration: none;
             display: block;
             font-size: 13px;
-            transition: all 0.2s ease;
         }
         
         .nav-dropdown .dropdown-menu a:hover {
@@ -541,7 +495,6 @@ function convertOutput($items, $format) {
             color: var(--text-primary);
         }
         
-        /* For touch devices - click to toggle */
         .nav-dropdown .dropdown-toggle {
             cursor: pointer;
         }
@@ -582,7 +535,7 @@ function convertOutput($items, $format) {
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(11, 8, 23, 0.75);
             z-index: 99;
             backdrop-filter: blur(4px);
         }
@@ -670,7 +623,7 @@ function convertOutput($items, $format) {
         .page-header h1 {
             font-size: 28px;
             font-weight: 700;
-            background: linear-gradient(135deg, var(--accent), var(--text-accent));
+            background: linear-gradient(135deg, var(--accent), #c4b5fd);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -699,6 +652,12 @@ function convertOutput($items, $format) {
             border: 1px solid var(--border-color);
             border-radius: var(--radius);
             padding: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .panel:hover {
+            border-color: var(--accent-border);
+            box-shadow: 0 0 0 1px var(--accent-glow), 0 8px 32px rgba(0, 0, 0, 0.5);
         }
         
         .panel-title {
@@ -714,10 +673,11 @@ function convertOutput($items, $format) {
         .panel-title .badge {
             font-size: 11px;
             font-weight: 400;
-            color: var(--text-muted);
-            background: var(--bg-primary);
+            color: var(--accent);
+            background: var(--accent-icon-bg);
             padding: 2px 10px;
             border-radius: 12px;
+            border: 1px solid var(--accent-border);
         }
         
         textarea {
@@ -773,6 +733,7 @@ function convertOutput($items, $format) {
             color: var(--text-primary);
             font-size: 13px;
             cursor: pointer;
+            transition: all 0.2s ease;
         }
         
         select:focus {
@@ -797,38 +758,42 @@ function convertOutput($items, $format) {
         
         .btn:hover {
             background: var(--bg-hover);
+            border-color: var(--border-hover);
             transform: translateY(-1px);
         }
         
         .btn-primary {
             background: var(--accent);
-            color: white;
+            color: #0b0817;
             border-color: var(--accent);
         }
         
         .btn-primary:hover {
             background: var(--accent-hover);
             border-color: var(--accent-hover);
+            box-shadow: 0 0 20px var(--accent-glow-strong);
         }
         
         .btn-success {
             background: var(--success);
-            color: #0a0e1a;
+            color: #0b0817;
             border-color: var(--success);
         }
         
         .btn-success:hover {
-            opacity: 0.8;
+            opacity: 0.85;
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2);
         }
         
         .btn-danger {
             background: var(--danger);
-            color: white;
+            color: #0b0817;
             border-color: var(--danger);
         }
         
         .btn-danger:hover {
-            opacity: 0.8;
+            opacity: 0.85;
+            box-shadow: 0 0 20px rgba(248, 113, 113, 0.2);
         }
         
         .stats-bar {
@@ -846,7 +811,7 @@ function convertOutput($items, $format) {
         }
         
         .stat-item strong {
-            color: var(--text-primary);
+            color: var(--accent);
             font-size: 16px;
         }
         
@@ -910,43 +875,38 @@ function convertOutput($items, $format) {
         
         .toast.error {
             border-color: var(--danger);
+            box-shadow: 0 0 20px rgba(248, 113, 113, 0.2);
         }
         
         .toast.success {
             border-color: var(--success);
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.2);
         }
         
         @media (max-width: 480px) {
             .container {
                 padding: 12px;
             }
-            
             .page-header h1 {
                 font-size: 22px;
             }
-            
             .panel {
                 padding: 14px;
             }
-            
             textarea {
                 min-height: 200px;
                 font-size: 12px;
             }
-            
             .controls {
                 flex-direction: column;
                 align-items: stretch;
             }
-            
             .controls-group {
                 justify-content: space-between;
             }
-            
             select {
                 flex: 1;
             }
-            
             .btn {
                 flex: 1;
                 text-align: center;
@@ -974,15 +934,14 @@ function convertOutput($items, $format) {
         
         ::selection {
             background: var(--accent);
-            color: white;
+            color: #0b0817;
         }
     </style>
 </head>
 <body>
-    <!-- Navigation - Same as main page -->
     <nav class="navbar">
         <a href="converter.php" class="nav-brand">
-            <span class="brand-icon">♻️</span>
+            <span class="brand-icon"><img width="45px" src="assets/images/convert.png" /></span>
             List Converter
         </a>
         
@@ -1010,7 +969,6 @@ function convertOutput($items, $format) {
         </button>
     </nav>
     
-    <!-- Mobile Navigation -->
     <div class="nav-overlay" id="navOverlay"></div>
     <div class="nav-mobile" id="navMobile">
         <?php foreach ($navItems as $key => $item): ?>
@@ -1037,7 +995,6 @@ function convertOutput($items, $format) {
         </div>
         
         <div class="converter-grid">
-            <!-- Input Panel -->
             <div class="panel">
                 <div class="panel-title">
                     📥 Input
@@ -1068,7 +1025,6 @@ function convertOutput($items, $format) {
                 </div>
             </div>
             
-            <!-- Output Panel -->
             <div class="panel">
                 <div class="panel-title">
                     📤 Output
@@ -1123,7 +1079,6 @@ function convertOutput($items, $format) {
     <div class="toast" id="toast"></div>
     
     <script>
-        // Navigation toggle
         const hamburger = document.getElementById('hamburger');
         const navOverlay = document.getElementById('navOverlay');
         const navMobile = document.getElementById('navMobile');
@@ -1144,7 +1099,6 @@ function convertOutput($items, $format) {
             });
         });
         
-        // Touch support for dropdowns on mobile
         document.querySelectorAll('.nav-dropdown > a').forEach(link => {
             link.addEventListener('click', function(e) {
                 if (window.innerWidth <= 768) {
@@ -1153,7 +1107,6 @@ function convertOutput($items, $format) {
                     const menu = parent.querySelector('.dropdown-menu');
                     if (menu) {
                         const isOpen = menu.style.opacity === '1';
-                        // Close all others
                         document.querySelectorAll('.nav-dropdown .dropdown-menu').forEach(m => {
                             if (m !== menu) {
                                 m.style.opacity = '0';
@@ -1161,7 +1114,6 @@ function convertOutput($items, $format) {
                                 m.style.pointerEvents = 'none';
                             }
                         });
-                        // Toggle this one
                         if (isOpen) {
                             menu.style.opacity = '0';
                             menu.style.visibility = 'hidden';
@@ -1176,7 +1128,6 @@ function convertOutput($items, $format) {
             });
         });
         
-        // Close dropdowns when clicking outside
         document.addEventListener('click', function(e) {
             if (!e.target.closest('.nav-dropdown')) {
                 document.querySelectorAll('.nav-dropdown .dropdown-menu').forEach(menu => {
@@ -1187,7 +1138,6 @@ function convertOutput($items, $format) {
             }
         });
         
-        // Converter functions
         function showToast(message, type = '') {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -1252,7 +1202,6 @@ function convertOutput($items, $format) {
                     document.querySelector('.copy-btn').style.display = 'block';
                     document.getElementById('itemCount').textContent = data.count + ' items';
                     
-                    // Show stats
                     const statsBar = document.getElementById('statsBar');
                     statsBar.style.display = 'flex';
                     document.getElementById('statItems').textContent = data.count;
@@ -1324,13 +1273,8 @@ function convertOutput($items, $format) {
             
             const format = document.getElementById('outputFormat').value;
             const extensions = {
-                'txt': 'txt',
-                'json': 'json',
-                'ini': 'ini',
-                'lua': 'lua',
-                'cpp': 'cpp',
-                'csv': 'csv',
-                'php': 'php'
+                'txt': 'txt', 'json': 'json', 'ini': 'ini',
+                'lua': 'lua', 'cpp': 'cpp', 'csv': 'csv', 'php': 'php'
             };
             
             const ext = extensions[format] || 'txt';
@@ -1346,7 +1290,6 @@ function convertOutput($items, $format) {
             showToast('Download started!', 'success');
         }
         
-        // Enter key to convert
         document.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
@@ -1354,7 +1297,6 @@ function convertOutput($items, $format) {
             }
         });
         
-        // Format change triggers auto-convert if there's input
         document.getElementById('outputFormat').addEventListener('change', () => {
             const input = document.getElementById('inputArea').value.trim();
             if (input) {

@@ -1,2364 +1,602 @@
-<?php
-// =============================================
-// CONFIGURATION - Toggle between data sources
-// =============================================
-// Set to false for GitHub Pages (JSON mode)
-// Set to true for traditional hosting (Database mode)
-define('USE_DATABASE', true);
-// =============================================
-
-// Navigation (always needed)
-require_once 'assets/php/nav.php';
-
-// =============================================
-// DATABASE MODE (Traditional Hosting)
-// =============================================
-if (USE_DATABASE) {
-    // Database connection
-    require_once 'assets/php/connect.php';
-    
-    // --- Original Database Query Logic ---
-    // Get search parameters
-    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $namespace = isset($_GET['namespace']) ? trim($_GET['namespace']) : '';
-    $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-    $perPage = isset($_GET['per_page']) ? min(200, max(1, (int)$_GET['per_page'])) : 50;
-    $offset = ($page - 1) * $perPage;
-    $selectedId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-
-    // Build the query
-    $sql = "SELECT 
-                n.id,
-                n.hash,
-                n.name,
-                n.return_type,
-                n.params,
-                n.comment,
-                n.build,
-                n.gta_hash,
-                n.gta_jhash,
-                ns.name as namespace
-            FROM natives n
-            JOIN namespaces ns ON n.namespace_id = ns.id
-            WHERE 1=1";
-
-    $params = [];
-
-    // Namespace filter
-    if (!empty($namespace)) {
-        $sql .= " AND ns.name = ?";
-        $params[] = $namespace;
-    }
-
-    // Search term
-    if (!empty($search)) {
-        $terms = explode(' ', $search);
-        $whereConditions = [];
-        
-        foreach ($terms as $term) {
-            if (strlen($term) < 2) continue;
-            $term = '%' . $term . '%';
-            $whereConditions[] = "(n.name LIKE ? OR ns.name LIKE ? OR n.comment LIKE ? OR n.hash LIKE ?)";
-            $params[] = $term;
-            $params[] = $term;
-            $params[] = $term;
-            $params[] = $term;
-        }
-        
-        if (!empty($whereConditions)) {
-            $sql .= " AND (" . implode(' OR ', $whereConditions) . ")";
-        }
-    }
-
-    // Get total count
-    $countSql = str_replace(
-        "SELECT 
-                n.id,
-                n.hash,
-                n.name,
-                n.return_type,
-                n.params,
-                n.comment,
-                n.build,
-                n.gta_hash,
-                n.gta_jhash,
-                ns.name as namespace",
-        "SELECT COUNT(*) as total",
-        $sql
-    );
-
-    $stmt = $pdo->prepare($countSql);
-    $stmt->execute($params);
-    $total = (int)$stmt->fetch()['total'];
-
-    // Get paginated results
-    $sql .= " ORDER BY ns.name, n.name LIMIT ? OFFSET ?";
-    $params[] = $perPage;
-    $params[] = $offset;
-
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
-    $results = $stmt->fetchAll();
-
-    // Get selected native details
-    $selectedNative = null;
-    if ($selectedId > 0) {
-        $stmt = $pdo->prepare("
-            SELECT 
-                n.id,
-                n.hash,
-                n.name,
-                n.return_type,
-                n.params,
-                n.comment,
-                n.build,
-                n.gta_hash,
-                n.gta_jhash,
-                ns.name as namespace
-            FROM natives n
-            JOIN namespaces ns ON n.namespace_id = ns.id
-            WHERE n.id = ?
-        ");
-        $stmt->execute([$selectedId]);
-        $selectedNative = $stmt->fetch();
-    } elseif (!empty($results)) {
-        // Auto-select first result
-        $selectedNative = $results[0];
-        $selectedId = $selectedNative['id'];
-    }
-
-    // Get all namespaces for dropdown
-    $namespaceStmt = $pdo->query("SELECT id, name, native_count FROM namespaces ORDER BY name");
-    $namespaces = $namespaceStmt->fetchAll();
-
-    // Stats
-    $statsStmt = $pdo->query("SELECT COUNT(*) as total FROM natives");
-    $totalNatives = $statsStmt->fetch()['total'];
-}
-
-// =============================================
-// JSON MODE (GitHub Pages)
-// =============================================
-if (!USE_DATABASE) {
-    // --- JSON Data Fetching ---
-    $jsonUrl = 'https://alloc8or.re/rdr3/nativedb/static/natives.json?_=1784580002';
-    $jsonData = null;
-    $nativeData = []; // Flat list of all natives
-    $namespaceData = []; // Namespace info with counts
-
-    // Fetch the JSON data
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $jsonUrl);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Consider enabling for production
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($httpCode === 200 && $response !== false) {
-        $jsonData = json_decode($response, true);
-    }
-
-    if ($jsonData === null) {
-        // Handle error gracefully - show message or fallback
-        die('Error: Could not fetch native data. Please try again later.');
-    }
-
-    // Process JSON data into a flat array and namespace stats
-    $allNatives = [];
-    $namespaceCounts = [];
-
-    foreach ($jsonData as $namespace => $natives) {
-        if (!isset($namespaceCounts[$namespace])) {
-            $namespaceCounts[$namespace] = 0;
-        }
-        foreach ($natives as $hash => $details) {
-            // Add namespace to each native for easy access
-            $details['namespace'] = $namespace;
-            $details['hash'] = $hash; // Store the full hash
-            // Ensure params is always an array
-            if (!isset($details['params']) || !is_array($details['params'])) {
-                $details['params'] = [];
-            }
-            $allNatives[] = $details;
-            $namespaceCounts[$namespace]++;
-        }
-    }
-
-    $nativeData = $allNatives;
-    // Build namespace data for dropdown
-    $namespaceData = [];
-    foreach ($namespaceCounts as $name => $count) {
-        $namespaceData[] = ['name' => $name, 'native_count' => $count];
-    }
-    usort($namespaceData, function($a, $b) {
-        return strcmp($a['name'], $b['name']);
-    });
-
-    // --- JSON Mode Search Logic ---
-    // Get search parameters
-    $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-    $namespace = isset($_GET['namespace']) ? trim($_GET['namespace']) : '';
-    $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-    $perPage = isset($_GET['per_page']) ? min(200, max(1, (int)$_GET['per_page'])) : 50;
-    $offset = ($page - 1) * $perPage;
-    $selectedId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-
-    // Filter and search
-    $filteredResults = $nativeData;
-
-    // Namespace filter
-    if (!empty($namespace)) {
-        $filteredResults = array_filter($filteredResults, function($native) use ($namespace) {
-            return $native['namespace'] === $namespace;
-        });
-    }
-
-    // Search term (text search on name, namespace, comment, hash)
-    if (!empty($search)) {
-        $terms = explode(' ', $search);
-        $filteredResults = array_filter($filteredResults, function($native) use ($terms) {
-            $searchableText = strtolower(
-                $native['name'] . ' ' .
-                $native['namespace'] . ' ' .
-                ($native['comment'] ?? '') . ' ' .
-                ($native['hash'] ?? '')
-            );
-            foreach ($terms as $term) {
-                if (strlen($term) < 2) continue;
-                if (strpos($searchableText, strtolower($term)) === false) {
-                    return false;
-                }
-            }
-            return true;
-        });
-    }
-
-    // Re-index array after filtering
-    $filteredResults = array_values($filteredResults);
-
-    // Get total count after filtering
-    $total = count($filteredResults);
-
-    // Pagination
-    $totalPages = ceil($total / $perPage);
-    $page = min($page, max(1, $totalPages)); // Ensure page is valid
-    $offset = ($page - 1) * $perPage;
-    $results = array_slice($filteredResults, $offset, $perPage);
-
-    // Get selected native details
-    $selectedNative = null;
-    if ($selectedId > 0 && $selectedId < count($nativeData)) {
-        $selectedNative = $nativeData[$selectedId] ?? null;
-        if ($selectedNative) {
-            // Ensure namespace is set for selected native
-            if (!isset($selectedNative['namespace'])) {
-                foreach ($jsonData as $ns => $natives) {
-                    foreach ($natives as $hash => $details) {
-                        if ($details === $selectedNative) {
-                            $selectedNative['namespace'] = $ns;
-                            break 2;
-                        }
-                    }
-                }
-            }
-        }
-    } elseif (!empty($results)) {
-        // Auto-select first result
-        $selectedNative = $results[0];
-        // Find its ID (index in original array)
-        $selectedId = array_search($selectedNative, $nativeData, true);
-        if ($selectedId === false) {
-            // Fallback: find by hash/name combo
-            foreach ($nativeData as $index => $n) {
-                if ($n['hash'] === $selectedNative['hash'] && $n['name'] === $selectedNative['name']) {
-                    $selectedId = $index;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Stats (from JSON data)
-    $totalNatives = count($nativeData);
-    $namespaces = $namespaceData; // Already built above
-}
-
-// =============================================
-// SHARED HELPER FUNCTIONS (Works for both modes)
-// =============================================
-
-// Format params for display
-function formatParams($paramsJson) {
-    if (empty($paramsJson)) return [];
-    if (is_array($paramsJson)) return $paramsJson;
-    $params = json_decode($paramsJson, true);
-    if (!is_array($params)) return [];
-    return $params;
-}
-
-// Format signature
-function formatSignature($name, $namespace, $params) {
-    $paramStr = '';
-    if (!empty($params)) {
-        $paramParts = array_map(function($p) {
-            return $p['type'] . ' ' . $p['name'];
-        }, $params);
-        $paramStr = implode(', ', $paramParts);
-    }
-    return $namespace . '::' . $name . '(' . $paramStr . ')';
-}
-
-// Get return type description
-function getReturnDescription($type) {
-    if (empty($type)) return 'void';
-    $desc = [
-        'BOOL' => 'Boolean (true/false)',
-        'int' => 'Integer (number)',
-        'float' => 'Float (decimal)',
-        'void' => 'Void (no return)',
-        'Hash' => 'Hash (integer)',
-        'Ped' => 'Ped handle',
-        'Vehicle' => 'Vehicle handle',
-        'Entity' => 'Entity handle',
-        'Object' => 'Object handle',
-        'ScrHandle' => 'Script handle',
-        'Any' => 'Any type',
-        'const char*' => 'String (text)',
-        'Vector3*' => 'Vector3 pointer',
-        'Any*' => 'Pointer to any type',
-        'int*' => 'Integer pointer',
-        'float*' => 'Float pointer',
-    ];
-    return isset($desc[$type]) ? $desc[$type] : $type;
-}
-
-// =============================================
-// HTML OUTPUT (Same for both modes)
-// =============================================
-?>
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>RDR2 NativeDB Explorer</title>
-	<link rel="icon" type="image/png" href="assets/images/rdr2ndb.png">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RageTools - Home</title>
+    <link rel="icon" type="image/png" href="assets/images/logo.png">
     <style>
-        /* Reset and base */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        :root {
-            --bg-primary: #120a0a;
-            --bg-secondary: #1a0f0f;
-            --bg-card: #2a1a1a;
-            --bg-hover: #3a2424;
-            --bg-detail: #120a0a;
-            --bg-nav: #100a0a;
-            --text-primary: #f5e8e8;
-            --text-secondary: #b58a8a;
-            --text-muted: #8a5a5a;
-            --text-accent: #f87171;
-            --accent: #ef4444;
-            --accent-hover: #dc2626;
-            --accent-glow: rgba(239, 68, 68, 0.15);
-            --border-color: #3a1a1a;
-            --success: #4ade80;
-            --warning: #fbbf24;
-            --danger: #ef4444;
-            --radius: 12px;
-            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            --nav-height: 50px;
-            --header-height: 110px;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        /* Navigation */
-        .navbar {
-            background: var(--bg-nav);
-            border-bottom: 1px solid var(--border-color);
-            padding: 0 20px;
-            height: var(--nav-height);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-shrink: 0;
-            position: relative;
-            z-index: 100;
-        }
-        
-        .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-weight: 700;
-            font-size: 16px;
-            color: var(--text-primary);
-            text-decoration: none;
-        }
-        
-        .nav-brand .brand-icon {
-            font-size: 20px;
-        }
-        
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            list-style: none;
-        }
-        
-        .nav-links li {
-            position: relative;
-        }
-        
-        .nav-links a {
-            display: flex;
-            align-items: center;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+        --bg-primary: #0a0a0f;
+        --bg-secondary: #12121a;
+        --bg-card: #1a1a26;
+        --bg-hover: #232333;
+        --text-primary: #f0f0f5;
+        --text-secondary: #9494a8;
+        --text-muted: #5a5a70;
+        --border-color: #2a2a3a;
+        --accent: #6c8cff;
+        --accent-hover: #5a7ae0;
+        --accent-glow: rgba(108, 140, 255, 0.15);
+        --radius: 16px;
+        --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    }
+
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow-x: hidden;
+    }
+
+    /* Animated background gradient */
+    body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background:
+            radial-gradient(circle at 15% 20%, rgba(239, 68, 68, 0.08) 0%, transparent 40%),
+            radial-gradient(circle at 85% 80%, rgba(108, 140, 255, 0.08) 0%, transparent 40%),
+            radial-gradient(circle at 50% 50%, rgba(167, 139, 250, 0.04) 0%, transparent 60%);
+        pointer-events: none;
+        z-index: 0;
+    }
+
+    /* Page content */
+    .container {
+        position: relative;
+        z-index: 1;
+        flex: 1;
+        max-width: 1400px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 80px 24px 60px;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* Hero section */
+    .hero {
+        text-align: center;
+        margin-bottom: 64px;
+        animation: fadeInUp 0.6s ease;
+    }
+
+    .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 16px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border-color);
+        border-radius: 100px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-bottom: 24px;
+    }
+
+    .hero-badge .dot-green {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #4ade80;
+        box-shadow: 0 0 8px #4ade80;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    .hero-badge .dot-red {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #de4a4a;
+        box-shadow: 0 0 8px #de4a4a;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    .hero-badge .dot-orange {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #f97316;
+        box-shadow: 0 0 8px #f97316;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    /* GTA IV */
+    .hero-badge .dot-blue {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #38bdf8;
+        box-shadow: 0 0 8px #38bdf8;
+        animation: pulse 2s ease-in-out infinite;
+    }
+	
+	.hero-badge .dot-pink {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: #ec4899;
+		box-shadow: 0 0 8px #ec4899;
+		animation: pulse 2s ease-in-out infinite;
+	}
+
+    /* RDR */
+    .hero-badge .dot-gold {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #d6a85f;
+        box-shadow: 0 0 8px #d6a85f;
+        animation: pulse 2s ease-in-out infinite;
+    }
+
+    .hero h1 {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 16px;
+        line-height: 0;
+        width: 100%;
+    }
+
+    .hero h1 .brand-img {
+        display: block;
+        height: clamp(56px, 9vw, 96px);
+        width: auto;
+        max-width: 90vw;
+        object-fit: contain;
+        margin: 0 auto;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+
+    .hero p {
+        font-size: clamp(15px, 2vw, 18px);
+        color: var(--text-secondary);
+        max-width: 640px;
+        margin: 0 auto;
+        line-height: 1.6;
+    }
+
+    /* Cards grid — 4 columns on desktop */
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 64px;
+    }
+
+    .card {
+        position: relative;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        padding: 20px 16px;
+        text-decoration: none;
+        color: inherit;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 200px;
+        animation: fadeInUp 0.6s ease backwards;
+    }
+
+    .card:nth-child(1) { animation-delay: 0.05s; }
+    .card:nth-child(2) { animation-delay: 0.1s; }
+    .card:nth-child(3) { animation-delay: 0.15s; }
+    .card:nth-child(4) { animation-delay: 0.2s; }
+    .card:nth-child(5) { animation-delay: 0.25s; }
+    .card:nth-child(6) { animation-delay: 0.3s; }
+    .card:nth-child(7) { animation-delay: 0.35s; }
+
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--card-accent);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+
+    .card::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: radial-gradient(circle at top right, var(--card-glow) 0%, transparent 60%);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+    }
+
+    .card:hover {
+        border-color: var(--card-accent);
+        transform: translateY(-4px);
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--card-accent);
+    }
+
+    .card:hover::before,
+    .card:hover::after {
+        opacity: 1;
+    }
+
+    .card-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        margin-bottom: 14px;
+        background: var(--card-icon-bg);
+        border: 1px solid var(--card-accent);
+        transition: transform 0.3s ease;
+    }
+
+    .card-icon img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        image-rendering: -webkit-optimize-contrast;
+    }
+
+    .card:hover .card-icon {
+        transform: scale(1.2) rotate(-3deg);
+    }
+
+    .card-title {
+        font-size: 15px;
+        font-weight: 700;
+        margin-bottom: 6px;
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+    }
+
+    .card-desc {
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+        flex: 1;
+    }
+
+    .card-footer {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 14px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--card-accent);
+    }
+
+    .card-footer .arrow {
+        transition: transform 0.3s ease;
+    }
+
+    .card:hover .card-footer .arrow {
+        transform: translateX(4px);
+    }
+
+    /* Per-card theming */
+    .card-rdr {
+        --card-accent: #ef4444;
+        --card-glow: rgba(239, 68, 68, 0.12);
+        --card-icon-bg: rgba(239, 68, 68, 0.1);
+    }
+
+    .card-gta {
+        --card-accent: #4ade80;
+        --card-glow: rgba(74, 222, 128, 0.12);
+        --card-icon-bg: rgba(74, 222, 128, 0.1);
+    }
+	
+	.card:nth-child(8) { animation-delay: 0.4s; }
+	
+	.card-mncla {
+		--card-accent: #3b00a8;
+		--card-glow: rgba(59, 0, 168, 0.14);
+		--card-icon-bg: rgba(59, 0, 168, 0.1);
+	}
+
+    .card-mp3 {
+        --card-accent: #f97316;
+        --card-glow: rgba(249, 115, 22, 0.12);
+        --card-icon-bg: rgba(249, 115, 22, 0.1);
+    }
+
+    /* GTA IV */
+    .card-gta4 {
+        --card-accent: #38bdf8;
+        --card-glow: rgba(56, 189, 248, 0.14);
+        --card-icon-bg: rgba(56, 189, 248, 0.1);
+    }
+
+    /* RDR */
+    .card-rdr-original {
+        --card-accent: #d6a85f;
+        --card-glow: rgba(214, 168, 95, 0.14);
+        --card-icon-bg: rgba(214, 168, 95, 0.1);
+    }
+
+    .card-creator {
+        --card-accent: #6c8cff;
+        --card-glow: rgba(108, 140, 255, 0.12);
+        --card-icon-bg: rgba(108, 140, 255, 0.1);
+    }
+
+    .card-converter {
+        --card-accent: #a78bfa;
+        --card-glow: rgba(167, 139, 250, 0.12);
+        --card-icon-bg: rgba(167, 139, 250, 0.1);
+    }
+
+    /* Footer */
+    .footer {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+        padding: 32px 24px;
+        border-top: 1px solid var(--border-color);
+        font-size: 13px;
+        color: var(--text-muted);
+    }
+
+    .footer a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: color 0.2s ease;
+    }
+
+    .footer a:hover {
+        color: var(--text-primary);
+    }
+
+    .footer .sep {
+        margin: 0 10px;
+        opacity: 0.4;
+    }
+
+    /* Responsive — drop to 3, 2 columns as the screen narrows */
+    @media (max-width: 1100px) {
+        .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 900px) {
+        .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 640px) {
+        .auth-corner {
+            top: 14px;
+            right: 14px;
             gap: 6px;
-            padding: 8px 14px;
-            border-radius: 8px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-size: 13px;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            white-space: nowrap;
         }
-        
-        .nav-links a:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-        
-        .nav-links a.active {
-            background: var(--accent);
-            color: #120a0a;
-        }
-        
-        .nav-links a .nav-badge {
-            font-size: 10px;
-            background: var(--danger);
-            color: white;
-            padding: 1px 8px;
-            border-radius: 12px;
-            margin-left: 4px;
-        }
-        
-        /* Dropdown - Fixed hover behavior */
-        .nav-dropdown {
-            position: relative;
-        }
-        
-        .nav-dropdown .dropdown-menu {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 0;
-            min-width: 200px;
-            box-shadow: var(--shadow);
-            margin-top: 4px;
-            opacity: 0;
-            visibility: hidden;
-            transform: translateY(-8px);
-            transition: all 0.25s ease;
-            pointer-events: none;
-        }
-        
-        .nav-dropdown:hover .dropdown-menu,
-        .nav-dropdown:focus-within .dropdown-menu {
-            opacity: 1;
-            visibility: visible;
-            transform: translateY(0);
-            pointer-events: auto;
-        }
-        
-        .nav-dropdown .dropdown-menu:hover {
-            opacity: 1;
-            visibility: visible;
-            transform: translateY(0);
-            pointer-events: auto;
-        }
-        
-        .nav-dropdown .dropdown-menu a {
-            padding: 8px 16px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            display: block;
-            font-size: 13px;
-            transition: all 0.2s ease;
-        }
-        
-        .nav-dropdown .dropdown-menu a:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-        
-        .hamburger {
-            display: none;
-            flex-direction: column;
-            gap: 4px;
-            cursor: pointer;
-            padding: 6px;
-            background: none;
-            border: none;
-        }
-        
-        .hamburger span {
-            display: block;
-            width: 24px;
-            height: 2px;
-            background: var(--text-secondary);
-            transition: all 0.3s ease;
-            border-radius: 2px;
-        }
-        
-        .hamburger.active span:nth-child(1) {
-            transform: rotate(45deg) translate(5px, 5px);
-        }
-        
-        .hamburger.active span:nth-child(2) {
-            opacity: 0;
-        }
-        
-        .hamburger.active span:nth-child(3) {
-            transform: rotate(-45deg) translate(5px, -5px);
-        }
-        
-        .nav-overlay {
-            display: none;
-            position: fixed;
-            top: var(--nav-height);
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
-            z-index: 99;
-            backdrop-filter: blur(4px);
-        }
-        
-        .nav-overlay.open {
-            display: block;
-        }
-        
-        .nav-mobile {
-            display: none;
-            position: fixed;
-            top: var(--nav-height);
-            left: 0;
-            right: 0;
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-color);
-            padding: 12px 20px;
-            z-index: 100;
-            max-height: calc(100vh - var(--nav-height));
-            overflow-y: auto;
-            box-shadow: var(--shadow);
-        }
-        
-        .nav-mobile.open {
-            display: block;
-        }
-        
-        .nav-mobile a {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            color: var(--text-secondary);
-            text-decoration: none;
-            border-radius: 8px;
-            font-size: 14px;
-            transition: all 0.2s ease;
-        }
-        
-        .nav-mobile a:hover,
-        .nav-mobile a.active {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-        
-        .nav-mobile .mobile-submenu {
-            padding-left: 20px;
-            border-left: 2px solid var(--border-color);
-            margin: 4px 0 4px 12px;
-        }
-        
-        .nav-mobile .mobile-submenu a {
-            font-size: 13px;
+        .auth-corner .auth-link {
+            font-size: 12px;
             padding: 6px 12px;
         }
-        
-        .nav-mobile .nav-divider {
-            height: 1px;
-            background: var(--border-color);
-            margin: 8px 0;
-        }
-        
-        @media (max-width: 768px) {
-            .nav-links {
-                display: none;
-            }
-            .hamburger {
-                display: flex;
-            }
-            .navbar {
-                padding: 0 16px;
-            }
-        }
-        
-        /* Header */
-        .header {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border-color);
-            padding: 10px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-        
-        .header-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        .header-stats {
-            display: flex;
-            gap: 16px;
-        }
-        
-        .header-stats .stat {
-            font-size: 11px;
-            color: var(--text-secondary);
-            text-align: center;
-        }
-        
-        .header-stats .stat strong {
-            display: block;
-            font-size: 14px;
-            color: var(--text-primary);
-        }
-        
-        .search-row {
-            display: flex;
-            gap: 8px;
-            flex: 1;
-            max-width: 600px;
-            min-width: 180px;
-            align-items: center;
-        }
-        
-        .search-wrapper {
-            flex: 1;
-            position: relative;
-            min-width: 120px;
-        }
-        
-        .search-wrapper input {
-            width: 100%;
-            padding: 8px 14px 8px 36px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            color: var(--text-primary);
-            font-size: 14px;
-            transition: all 0.3s ease;
-        }
-        
-        .search-wrapper input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
-        }
-        
-        .search-wrapper input::placeholder {
-            color: var(--text-muted);
-        }
-        
-        .search-icon {
-            position: absolute;
-            left: 10px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-muted);
-            font-size: 16px;
-            pointer-events: none;
-        }
-        
-        .search-clear {
-            position: absolute;
-            right: 10px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-muted);
-            font-size: 16px;
-            cursor: pointer;
+        .auth-corner .auth-user .uname {
             display: none;
-            background: none;
-            border: none;
-            padding: 0;
         }
-        
-        .search-clear.visible {
-            display: block;
+
+        .container {
+            padding: 60px 16px 40px;
         }
-        
-        .search-clear:hover {
-            color: var(--text-primary);
+
+        .hero {
+            margin-bottom: 40px;
         }
-        
-        .filter-select {
-            padding: 8px 12px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            color: var(--text-primary);
-            font-size: 13px;
-            cursor: pointer;
-            min-width: 120px;
-            max-width: 180px;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23b58a8a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 10px center;
-            padding-right: 32px;
+
+        .grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 40px;
         }
-        
-        .filter-select:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
+
+        .card {
+            padding: 16px 14px;
+            min-height: 180px;
         }
-        
-        .filter-select option {
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-        }
-        
-        /* Main Layout */
-        .main-layout {
-            display: flex;
-            flex: 1;
-            overflow: hidden;
-        }
-        
-        /* Left Panel - Native List */
-        .left-panel {
-            width: 42%;
-            min-width: 280px;
-            border-right: 1px solid var(--border-color);
-            display: flex;
-            flex-direction: column;
-            background: var(--bg-secondary);
-        }
-        
-        .panel-header {
-            padding: 10px 16px;
-            border-bottom: 1px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .panel-header .title {
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-secondary);
-        }
-        
-        .panel-header .count {
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-        
-        .native-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 4px 0;
-        }
-        
-        .native-list::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .native-list::-webkit-scrollbar-track {
-            background: var(--bg-primary);
-        }
-        
-        .native-list::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
-        }
-        
-        .native-list::-webkit-scrollbar-thumb:hover {
-            background: var(--accent);
-        }
-        
-        .native-item {
-            padding: 8px 16px;
-            cursor: pointer;
-            border-left: 3px solid transparent;
-            transition: all 0.15s ease;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            min-height: 40px;
-        }
-        
-        .native-item:hover {
-            background: var(--bg-hover);
-        }
-        
-        .native-item.active {
-            background: var(--bg-card);
-            border-left-color: var(--accent);
-        }
-        
-        .native-item .item-name {
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--text-primary);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            flex: 1;
-        }
-        
-        .native-item .item-namespace {
-            font-size: 11px;
-            color: var(--text-muted);
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-        
-        .native-item .item-hash {
-            font-size: 10px;
-            color: var(--text-muted);
-            font-family: monospace;
-            background: var(--bg-primary);
-            padding: 2px 6px;
-            border-radius: 4px;
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-        
-        /* Right Panel - Native Detail */
-        .right-panel {
-            flex: 1;
-            overflow-y: auto;
-            background: var(--bg-detail);
-            padding: 20px 28px;
-        }
-        
-        .right-panel::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .right-panel::-webkit-scrollbar-track {
-            background: var(--bg-primary);
-        }
-        
-        .right-panel::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
-        }
-        
-        .right-panel::-webkit-scrollbar-thumb:hover {
-            background: var(--accent);
-        }
-        
-        .detail-empty {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: var(--text-muted);
-            text-align: center;
-        }
-        
-        .detail-empty .icon {
-            font-size: 64px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-        
-        .detail-empty h2 {
+
+        .card-icon {
+            width: 44px;
+            height: 44px;
             font-size: 20px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-        }
-        
-        .detail-empty p {
-            font-size: 14px;
-            color: var(--text-muted);
-        }
-        
-        .detail-header {
-            margin-bottom: 20px;
-        }
-        
-        .detail-namespace {
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 4px;
-        }
-        
-        .detail-name {
-            font-size: 26px;
-            font-weight: 700;
-            color: var(--text-primary);
-            word-break: break-word;
-            margin-bottom: 4px;
-        }
-        
-        .detail-signature {
-            font-size: 14px;
-            font-family: 'Courier New', monospace;
-            color: var(--text-secondary);
-            background: var(--bg-primary);
-            padding: 10px 14px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 12px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        
-        .detail-hash {
-            font-size: 13px;
-            color: var(--text-muted);
-            font-family: monospace;
-            display: inline-block;
-            background: var(--bg-primary);
-            padding: 4px 12px;
-            border-radius: 4px;
-            border: 1px solid var(--border-color);
-            cursor: pointer;
             margin-bottom: 12px;
         }
-        
-        .detail-hash:hover {
-            border-color: var(--accent);
-        }
-        
-        .detail-section {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 14px 18px;
-            margin-bottom: 14px;
-        }
-        
-        .detail-section .section-title {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .detail-section .section-title .badge {
-            font-size: 11px;
-            font-weight: 400;
-            color: var(--text-muted);
-            background: var(--bg-primary);
-            padding: 2px 10px;
-            border-radius: 12px;
-        }
-        
-        .param-item {
-            display: flex;
-            gap: 12px;
-            padding: 5px 0;
-            border-bottom: 1px solid rgba(58, 26, 26, 0.3);
-            font-size: 13px;
-        }
-        
-        .param-item:last-child {
-            border-bottom: none;
-        }
-        
-        .param-type {
-            color: var(--warning);
-            font-weight: 500;
-            min-width: 80px;
-            font-family: 'Courier New', monospace;
-        }
-        
-        .param-name {
-            color: var(--text-primary);
-            font-family: 'Courier New', monospace;
-        }
-        
-        .param-editor {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            padding: 6px 0;
-            border-bottom: 1px solid rgba(58, 26, 26, 0.3);
-            font-size: 13px;
-            flex-wrap: wrap;
-        }
-        
-        .param-editor:last-child {
-            border-bottom: none;
-        }
-        
-        .param-editor .param-type {
-            color: var(--warning);
-            font-weight: 500;
-            min-width: 80px;
-            font-family: 'Courier New', monospace;
-            flex-shrink: 0;
-        }
-        
-        .param-editor .param-name {
-            color: var(--text-primary);
-            font-family: 'Courier New', monospace;
-            flex-shrink: 0;
-        }
-        
-        .param-editor .param-input {
-            flex: 1;
-            min-width: 100px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 4px 10px;
-            color: var(--text-primary);
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            transition: all 0.3s ease;
-        }
-        
-        .param-editor .param-input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
-        }
-        
-        .param-editor .param-input::placeholder {
-            color: var(--text-muted);
-            font-style: italic;
-            opacity: 0.6;
-        }
-        
-        .param-editor .param-input.has-value {
-            border-color: var(--success);
-            background: var(--bg-card);
-        }
-        
-        .param-editor .param-input.has-value:focus {
-            border-color: var(--accent);
-        }
-        
-        .param-editor .param-type-hint {
-            font-size: 11px;
-            color: var(--text-muted);
-            font-style: italic;
-            flex-shrink: 0;
-        }
-        
-        .param-editor .param-actions {
-            display: flex;
-            gap: 4px;
-            flex-shrink: 0;
-        }
-        
-        .param-editor .btn-small {
-            padding: 2px 8px;
-            font-size: 11px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        
-        .param-editor .btn-small:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-        
-        .param-editor .btn-small.btn-reset {
-            color: var(--danger);
-        }
-        
-        .param-editor .btn-small.btn-reset:hover {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .param-editor .btn-small.btn-apply-all {
-            color: var(--success);
-        }
-        
-        .param-editor .btn-small.btn-apply-all:hover {
-            background: var(--success);
-            color: #120a0a;
-        }
-        
-        .param-editor .btn-small.btn-clear-all {
-            color: var(--text-muted);
-        }
-        
-        .param-editor .btn-small.btn-clear-all:hover {
-            background: var(--text-muted);
-            color: #120a0a;
-        }
-        
-        .param-row {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            width: 100%;
-            flex-wrap: wrap;
-        }
-        
-        .param-row .param-info {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-shrink: 0;
-            min-width: 180px;
-        }
-        
-        .param-row .param-input-wrapper {
-            flex: 1;
-            min-width: 120px;
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .param-row .param-input-wrapper .param-input {
-            flex: 1;
-            min-width: 80px;
-        }
-        
-        .quick-fill-bar {
-            display: flex;
-            gap: 6px;
-            padding: 4px 0 8px 0;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .quick-fill-bar .label {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-right: 4px;
-        }
-        
-        .quick-fill-bar .btn-small {
-            padding: 2px 10px;
-            font-size: 11px;
-        }
-        
-        .generate-area {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid var(--border-color);
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        
-        .generate-area .preview {
-            flex: 1;
-            min-width: 200px;
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 8px 12px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            color: var(--text-secondary);
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-height: 80px;
-            overflow-y: auto;
-        }
-        
-        .generate-area .preview .highlight {
-            color: var(--success);
-        }
-        
-        .generate-area .preview .highlight-param {
-            color: var(--warning);
-        }
-        
-        .return-value {
-            font-size: 15px;
-            padding: 6px 0;
-        }
-        
-        .return-value .type {
-            color: var(--warning);
-            font-weight: 600;
-            font-family: 'Courier New', monospace;
-        }
-        
-        .return-value .desc {
-            color: var(--text-secondary);
-            font-size: 13px;
-            margin-left: 8px;
-        }
-        
-        .detail-comment {
-            color: var(--text-secondary);
+
+        .card-title {
             font-size: 14px;
-            line-height: 1.7;
-            white-space: pre-wrap;
-            word-break: break-word;
         }
-        
-        .detail-comment strong {
-            color: var(--text-primary);
+
+        .card-desc {
+            font-size: 11px;
         }
-        
-        .detail-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-top: 12px;
+    }
+
+    @media (max-width: 420px) {
+        .grid {
+            grid-template-columns: 1fr;
         }
-        
-        .detail-actions .btn {
-            font-size: 12px;
-            padding: 6px 14px;
+
+        .card {
+            min-height: auto;
         }
-        
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            white-space: nowrap;
-        }
-        
-        .btn:hover {
-            background: var(--bg-hover);
-            transform: translateY(-1px);
-        }
-        
-        .btn-primary {
-            background: var(--accent);
-            color: #120a0a;
-            border-color: var(--accent);
-        }
-        
-        .btn-primary:hover {
-            background: var(--accent-hover);
-            border-color: var(--accent-hover);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: #120a0a;
-            border-color: var(--success);
-        }
-        
-        .btn-success:hover {
-            opacity: 0.8;
-        }
-        
-        .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 4px;
-            padding: 8px 16px;
-            border-top: 1px solid var(--border-color);
-            flex-shrink: 0;
-            flex-wrap: wrap;
-        }
-        
-        .pagination .btn {
-            font-size: 12px;
-            padding: 4px 10px;
-            min-width: 32px;
-            text-align: center;
-        }
-        
-        .pagination .btn.active {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: #120a0a;
-        }
-        
-        .pagination .btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        
-        .toast {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            padding: 12px 24px;
-            border-radius: var(--radius);
-            color: var(--text-primary);
-            box-shadow: var(--shadow);
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s ease;
-            z-index: 999;
-            font-size: 14px;
-            max-width: 90vw;
-        }
-        
-        .toast.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .loading-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: var(--text-muted);
-            padding: 40px 20px;
-        }
-        
-        .loading-state .icon {
-            font-size: 48px;
-            margin-bottom: 12px;
-            opacity: 0.5;
-        }
-        
-        @media (max-width: 768px) {
-            body {
-                overflow: auto;
-                height: auto;
-            }
-            
-            .nav-links {
-                display: none;
-            }
-            
-            .hamburger {
-                display: flex;
-            }
-            
-            .navbar {
-                padding: 0 16px;
-            }
-            
-            .nav-brand {
-                font-size: 14px;
-            }
-            
-            .nav-brand .brand-icon {
-                font-size: 18px;
-            }
-            
-            .header {
-                padding: 8px 14px;
-                gap: 6px;
-            }
-            
-            .header-top {
-                flex-direction: row;
-                flex-wrap: wrap;
-            }
-            
-            .header-stats .stat strong {
-                font-size: 12px;
-            }
-            
-            .header-stats .stat {
-                font-size: 10px;
-            }
-            
-            .search-row {
-                max-width: 100%;
-                width: 100%;
-                flex-wrap: wrap;
-            }
-            
-            .search-wrapper {
-                flex: 1;
-                min-width: 100px;
-            }
-            
-            .filter-select {
-                min-width: 100px;
-                max-width: 100%;
-                flex: 1;
-            }
-            
-            .main-layout {
-                flex-direction: column;
-                height: auto;
-            }
-            
-            .left-panel {
-                width: 100%;
-                min-width: unset;
-                max-height: 45vh;
-                border-right: none;
-                border-bottom: 1px solid var(--border-color);
-            }
-            
-            .right-panel {
-                padding: 14px 16px;
-                min-height: 50vh;
-            }
-            
-            .detail-name {
-                font-size: 20px;
-            }
-            
-            .detail-signature {
-                font-size: 12px;
-                padding: 8px 12px;
-            }
-            
-            .native-item {
-                padding: 6px 12px;
-                min-height: 36px;
-            }
-            
-            .native-item .item-name {
-                font-size: 12px;
-            }
-            
-            .native-item .item-hash {
-                font-size: 9px;
-                display: none;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .navbar {
-                padding: 0 10px;
-                height: 44px;
-            }
-            
-            .header {
-                padding: 6px 10px;
-            }
-            
-            .header-stats {
-                gap: 8px;
-            }
-            
-            .right-panel {
-                padding: 10px 12px;
-                min-height: 40vh;
-            }
-            
-            .detail-name {
-                font-size: 17px;
-            }
-            
-            .detail-section {
-                padding: 10px 12px;
-            }
-            
-            .param-item {
-                font-size: 12px;
-                flex-wrap: wrap;
-                gap: 4px;
-            }
-            
-            .param-type {
-                min-width: 60px;
-                font-size: 11px;
-            }
-            
-            .param-name {
-                font-size: 11px;
-            }
-            
-            .detail-signature {
-                font-size: 11px;
-                padding: 6px 10px;
-            }
-            
-            .detail-actions .btn {
-                font-size: 11px;
-                padding: 4px 10px;
-            }
-            
-            .pagination .btn {
-                font-size: 11px;
-                padding: 3px 8px;
-                min-width: 28px;
-            }
-            
-            .search-wrapper input {
-                font-size: 13px;
-                padding: 6px 10px 6px 32px;
-            }
-            
-            .filter-select {
-                font-size: 12px;
-                padding: 6px 10px;
-                min-width: 80px;
-            }
-            
-            .toast {
-                font-size: 12px;
-                padding: 10px 16px;
-                bottom: 16px;
-                right: 16px;
-            }
-        }
-        
-        ::-webkit-scrollbar {
-            width: 5px;
-            height: 5px;
-        }
-        
-        ::-webkit-scrollbar-track {
-            background: var(--bg-primary);
-        }
-        
-        ::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 3px;
-        }
-        
-        ::-webkit-scrollbar-thumb:hover {
-            background: var(--accent);
-        }
-        
-        ::selection {
-            background: var(--accent);
-            color: #120a0a;
-        }
-    </style>
+    }
+
+    ::selection {
+        background: #6c8cff;
+        color: white;
+    }
+</style>
+
 </head>
 <body>
-    <!-- Navigation -->
-    <nav class="navbar">
-        <a href="rdr2nativedb.php" class="nav-brand">
-            <span class="brand-icon"><img width="55px" src="assets/images/rdr2ndb.png" /></span>
-            RDR2 NativeDB
+
+<div class="container">
+    <div class="hero">
+        <h1>
+            <img src="/assets/images/brand.png" class="brand-img" alt="RageTools">
+        </h1>
+        <p>A toolkit for RAGE engine modding. Explore native functions, generate boilerplate scripts, and convert data between formats — streamlining the workflow from research to implementation.</p>
+        <span class="sep">·</span>
+        <p>25,039 Natives Available</p>
+		
+        <div class="hero-badge" style="margin-top: 15px;">
+            <span class="dot-red"></span>
+            RDR2 <span class="sep">·</span> 7,132
+        </div>
+
+        <div class="hero-badge">
+            <span class="dot-green"></span>
+            GTA5 <span class="sep">·</span> 6,701
+        </div>
+
+        <div class="hero-badge">
+            <span class="dot-orange"></span>
+            MP3 <span class="sep">·</span> 3,813
+        </div>
+
+        <div class="hero-badge">
+            <span class="dot-blue"></span>
+            GTA4 <span class="sep">·</span> 2,630
+        </div>
+
+        <div class="hero-badge">
+            <span class="dot-gold"></span>
+            RDR <span class="sep">·</span> 3,496
+        </div>
+		
+		<div class="hero-badge">
+			<span class="dot-pink"></span>
+			MNCLA <span class="sep">·</span> 1,267
+		</div>
+    </div>
+
+    <div class="grid">
+
+        <a href="rdr2.php" class="card card-rdr">
+            <div class="card-icon">
+                <img src="assets/images/rdr2ndb.png" alt="RDR2 NativeDB" />
+            </div>
+            <div class="card-title">RDR2 NativeDB</div>
+            <div class="card-desc">Browse, search, and inspect Red Dead Redemption 2 native functions with full parameter details.</div>
+            <div class="card-footer">
+                Explore <span class="arrow">→</span>
+            </div>
         </a>
-        
-        <ul class="nav-links">
-            <?php foreach ($navItems as $key => $item): ?>
-                <li class="<?php echo isset($item['submenu']) ? 'nav-dropdown' : ''; ?>">
-                    <a href="<?php echo $item['url']; ?>" class="<?php echo $item['active'] ? 'active' : ''; ?>">
-                        <?php echo $item['label']; ?>
-                        <?php if (isset($item['badge'])): ?>
-                            <span class="nav-badge"><?php echo $item['badge']; ?></span>
-                        <?php endif; ?>
-                    </a>
-                    <?php if (isset($item['submenu'])): ?>
-                        <div class="dropdown-menu">
-                            <?php foreach ($item['submenu'] as $sub): ?>
-                                <a href="<?php echo $sub['url']; ?>"><?php echo $sub['label']; ?></a>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php endif; ?>
-                </li>
-            <?php endforeach; ?>
-        </ul>
-        
-        <button class="hamburger" id="hamburger" aria-label="Toggle menu">
-            <span></span>
-            <span></span>
-            <span></span>
-        </button>
-    </nav>
-    
-    <!-- Mobile Navigation -->
-    <div class="nav-overlay" id="navOverlay"></div>
-    <div class="nav-mobile" id="navMobile">
-        <?php foreach ($navItems as $key => $item): ?>
-            <a href="<?php echo $item['url']; ?>" class="<?php echo $item['active'] ? 'active' : ''; ?>">
-                <?php echo $item['label']; ?>
-                <?php if (isset($item['badge'])): ?>
-                    <span class="nav-badge"><?php echo $item['badge']; ?></span>
-                <?php endif; ?>
-            </a>
-            <?php if (isset($item['submenu'])): ?>
-                <div class="mobile-submenu">
-                    <?php foreach ($item['submenu'] as $sub): ?>
-                        <a href="<?php echo $sub['url']; ?>"><?php echo $sub['label']; ?></a>
-                    <?php endforeach; ?>
-                </div>
-            <?php endif; ?>
-            <?php if ($key !== array_key_last($navItems)): ?>
-                <div class="nav-divider"></div>
-            <?php endif; ?>
-        <?php endforeach; ?>
+
+        <a href="gta5.php" class="card card-gta">
+            <div class="card-icon">
+                <img src="assets/images/gta5ndb.png" alt="GTA5 NativeDB" />
+            </div>
+            <div class="card-title">GTA5 NativeDB</div>
+            <div class="card-desc">Search the complete Grand Theft Auto V native function database with signatures and hashes.</div>
+            <div class="card-footer">
+                Explore <span class="arrow">→</span>
+            </div>
+        </a>
+
+        <a href="mp3.php" class="card card-mp3">
+            <div class="card-icon">
+                <img src="assets/images/mp3ndb.png" alt="MP3 NativeDB" />
+            </div>
+            <div class="card-title">MP3 NativeDB</div>
+            <div class="card-desc">Browse and inspect Max Payne 3 native functions with full parameter details and live signature generation.</div>
+            <div class="card-footer">
+                Explore <span class="arrow">→</span>
+            </div>
+        </a>
+
+        <a href="gta4.php" class="card card-gta4">
+            <div class="card-icon">
+                <img src="assets/images/gta4ndb.png" alt="GTA4 NativeDB" />
+            </div>
+            <div class="card-title">GTA4 NativeDB</div>
+            <div class="card-desc">Browse and inspect Grand Theft Auto IV native functions with full parameter details and native hashes.</div>
+            <div class="card-footer">
+                Explore <span class="arrow">→</span>
+            </div>
+        </a>
+
+        <a href="rdr.php" class="card card-rdr-original">
+            <div class="card-icon">
+                <img src="assets/images/rdrndb.png" alt="RDR NativeDB" />
+            </div>
+            <div class="card-title">RDR NativeDB</div>
+            <div class="card-desc">Browse and inspect Red Dead Redemption native functions with full parameter details and native hashes.</div>
+            <div class="card-footer">
+                Explore <span class="arrow">→</span>
+            </div>
+        </a>
+		
+		<a href="mncla.php" class="card card-mncla">
+			<div class="card-icon">
+				<img src="assets/images/mnclandb.png" alt="MNCLA NativeDB" />
+			</div>
+			<div class="card-title">MNCLA NativeDB</div>
+			<div class="card-desc">Browse and inspect Midnight Club: Los Angeles native functions with full parameter details and native hashes.</div>
+			<div class="card-footer">
+				Explore <span class="arrow">→</span>
+			</div>
+		</a>
+
+        <a href="creator.php" class="card card-creator">
+            <div class="card-icon">
+                <img src="assets/images/gen.png" alt="Script Generator" />
+            </div>
+            <div class="card-title">Script Generator</div>
+            <div class="card-desc">Generate C++ command classes with proper includes, templates, and boilerplate code.</div>
+            <div class="card-footer">
+                Generate <span class="arrow">→</span>
+            </div>
+        </a>
+
+        <a href="converter.php" class="card card-converter">
+            <div class="card-icon">
+                <img src="assets/images/convert.png" alt="Converter" />
+            </div>
+            <div class="card-title">Converter</div>
+            <div class="card-desc">Convert Model/Ped Lists via URL or paste to TXT, LUA, C++, JSON & More.</div>
+            <div class="card-footer">
+                Convert <span class="arrow">→</span>
+            </div>
+        </a>
+
     </div>
+</div>
 
-    <!-- Header -->
-    <header class="header">
-        <div class="header-top">
-            <div class="header-stats">
-                <div class="stat">
-                    <strong><?php echo number_format($totalNatives); ?></strong>
-                    Natives
-                </div>
-                <div class="stat">
-                    <strong><?php echo number_format(count($namespaces)); ?></strong>
-                    Namespaces
-                </div>
-                <div class="stat">
-                    <strong id="resultCount"><?php echo number_format($total); ?></strong>
-                    Results
-                </div>
-            </div>
-        </div>
-        
-        <div class="search-row">
-            <div class="search-wrapper">
-                <span class="search-icon">🔍</span>
-                <input type="text" id="searchInput" placeholder="Search natives, keywords, hashes..." value="<?php echo htmlspecialchars($search); ?>" autocomplete="off" />
-                <button class="search-clear" id="searchClear" onclick="clearSearch()">✕</button>
-            </div>
-            <select class="filter-select" id="namespaceSelect">
-                <option value="">All Namespaces</option>
-                <?php foreach ($namespaces as $ns): ?>
-                    <option value="<?php echo htmlspecialchars($ns['name']); ?>" <?php echo $namespace === $ns['name'] ? 'selected' : ''; ?>>
-                        <?php echo htmlspecialchars($ns['name']); ?> (<?php echo $ns['native_count']; ?>)
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-    </header>
+<footer class="footer">
+    RageTools <span class="sep">·</span>
+    <a href="https://github.com/Deadlineem/RAGE-Tools" target="_blank" rel="noopener">GitHub</a>
+</footer>
 
-    <!-- Main Layout -->
-    <div class="main-layout">
-        <!-- Left Panel -->
-        <div class="left-panel">
-            <div class="panel-header">
-                <span class="title">📋 Natives</span>
-                <span class="count" id="listCount"><?php echo number_format($total); ?> total</span>
-            </div>
-            
-            <div class="native-list" id="nativeList">
-                <?php if (empty($results)): ?>
-                    <div class="loading-state">
-                        <div class="icon">🔍</div>
-                        <p>No results found</p>
-                        <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Try adjusting your search</p>
-                    </div>
-                <?php else: ?>
-                    <?php foreach ($results as $native): 
-                        // For database mode, use ID; for JSON mode, find index
-                        if (USE_DATABASE) {
-                            $nativeId = $native['id'];
-                        } else {
-                            $nativeId = array_search($native, $nativeData, true);
-                            if ($nativeId === false) {
-                                foreach ($nativeData as $idx => $n) {
-                                    if ($n['hash'] === $native['hash'] && $n['name'] === $native['name']) {
-                                        $nativeId = $idx;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    ?>
-                        <div class="native-item <?php echo $nativeId == $selectedId ? 'active' : ''; ?>" 
-                             data-id="<?php echo $nativeId; ?>"
-                             onclick="selectNative(<?php echo $nativeId; ?>)">
-                            <span class="item-name"><?php echo htmlspecialchars($native['name']); ?></span>
-                            <span class="item-namespace"><?php echo htmlspecialchars($native['namespace']); ?></span>
-                            <span class="item-hash"><?php echo substr($native['hash'], 0, 10); ?>…</span>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
-            
-            <?php if ($total > $perPage): 
-                $totalPages = ceil($total / $perPage);
-                $queryParams = $_GET;
-                unset($queryParams['page']);
-                $baseUrl = '?' . http_build_query($queryParams);
-            ?>
-            <div class="pagination" id="pagination">
-                <a href="<?php echo $baseUrl . '&page=' . ($page - 1); ?>" class="btn" <?php echo $page <= 1 ? 'disabled' : ''; ?>>‹</a>
-                
-                <?php
-                $startPage = max(1, $page - 2);
-                $endPage = min($totalPages, $page + 2);
-                
-                if ($startPage > 1): ?>
-                    <a href="<?php echo $baseUrl . '&page=1'; ?>" class="btn">1</a>
-                    <?php if ($startPage > 2): ?>
-                        <span class="btn" disabled>…</span>
-                    <?php endif; ?>
-                <?php endif; ?>
-                
-                <?php for ($i = $startPage; $i <= $endPage; $i++): ?>
-                    <a href="<?php echo $baseUrl . '&page=' . $i; ?>" class="btn <?php echo $i == $page ? 'active' : ''; ?>"><?php echo $i; ?></a>
-                <?php endfor; ?>
-                
-                <?php if ($endPage < $totalPages): ?>
-                    <?php if ($endPage < $totalPages - 1): ?>
-                        <span class="btn" disabled>…</span>
-                    <?php endif; ?>
-                    <a href="<?php echo $baseUrl . '&page=' . $totalPages; ?>" class="btn"><?php echo $totalPages; ?></a>
-                <?php endif; ?>
-                
-                <a href="<?php echo $baseUrl . '&page=' . ($page + 1); ?>" class="btn" <?php echo $page >= $totalPages ? 'disabled' : ''; ?>>›</a>
-            </div>
-            <?php endif; ?>
-        </div>
-        
-        <!-- Right Panel - Detail View -->
-        <div class="right-panel" id="detailPanel">
-            <?php if ($selectedNative): 
-                $params = formatParams($selectedNative['params']);
-                $signature = formatSignature($selectedNative['name'], $selectedNative['namespace'], $params);
-                $returnDesc = getReturnDescription($selectedNative['return_type']);
-            ?>
-                <div class="detail-header">
-                    <div class="detail-namespace"><?php echo htmlspecialchars($selectedNative['namespace']); ?></div>
-                    <div class="detail-name"><?php echo htmlspecialchars($selectedNative['name']); ?></div>
-                    <div class="detail-signature"><?php echo htmlspecialchars($signature); ?></div>
-                    <div class="detail-hash" onclick="copyText('<?php echo htmlspecialchars($selectedNative['hash']); ?>')">
-                        <?php echo htmlspecialchars($selectedNative['hash']); ?> 📋
-                    </div>
-                </div>
-                
-                <?php if (!empty($params)): ?>
-				<div class="detail-section">
-					<div class="section-title">
-						📝 Parameters
-						<span class="badge"><?php echo count($params); ?></span>
-					</div>
-					
-					<!-- Quick Fill Options -->
-					<div class="quick-fill-bar">
-						<span class="label">Quick Fill:</span>
-						<button class="btn-small btn-apply-all" onclick="applyAllParams()">Apply All</button>
-						<button class="btn-small btn-clear-all" onclick="clearAllParams()">Clear All</button>
-						<button class="btn-small" onclick="resetAllParams()">Reset All</button>
-						<span style="font-size:11px; color:var(--text-muted); margin-left:8px;">
-							💡 Leave empty to use type-hinted values
-						</span>
-					</div>
-					
-					<?php foreach ($params as $index => $param): 
-						$paramType = $param['type'];
-						$paramName = $param['name'];
-						// Generate a placeholder hint based on type
-						$placeholder = '';
-						$hint = '';
-						switch ($paramType) {
-							case 'int':
-							case 'Hash':
-							case 'Entity':
-							case 'Ped':
-							case 'Vehicle':
-							case 'Object':
-							case 'ScrHandle':
-								$placeholder = '0';
-								$hint = 'integer';
-								break;
-							case 'float':
-								$placeholder = '0.0f';
-								$hint = 'float';
-								break;
-							case 'BOOL':
-								$placeholder = 'true/false';
-								$hint = 'bool';
-								break;
-							case 'const char*':
-								$placeholder = '"text"';
-								$hint = 'string';
-								break;
-							case 'Vector3*':
-							case 'Any*':
-							case 'int*':
-							case 'float*':
-								$placeholder = '&variable';
-								$hint = 'pointer';
-								break;
-							default:
-								$placeholder = 'value';
-								$hint = $paramType;
-						}
-					?>
-						<div class="param-editor" data-index="<?php echo $index; ?>">
-							<div class="param-row">
-								<div class="param-info">
-									<span class="param-type"><?php echo htmlspecialchars($paramType); ?></span>
-									<span class="param-name"><?php echo htmlspecialchars($paramName); ?></span>
-								</div>
-								<div class="param-input-wrapper">
-									<input type="text" 
-										   class="param-input" 
-										   id="param_<?php echo $index; ?>" 
-										   placeholder="<?php echo htmlspecialchars($placeholder); ?>"
-										   data-type="<?php echo htmlspecialchars($paramType); ?>"
-										   data-name="<?php echo htmlspecialchars($paramName); ?>"
-										   oninput="updateParamPreview()" />
-									<span class="param-type-hint">(<?php echo htmlspecialchars($hint); ?>)</span>
-									<button class="btn-small btn-reset" onclick="resetParam(<?php echo $index; ?>)" title="Reset to default">↺</button>
-								</div>
-							</div>
-						</div>
-					<?php endforeach; ?>
-				</div>
-				<?php endif; ?>
-                
-                <div class="detail-section">
-                    <div class="section-title">↩️ Return Value</div>
-                    <div class="return-value">
-                        <span class="type"><?php echo htmlspecialchars($selectedNative['return_type'] ?: 'void'); ?></span>
-                        <span class="desc">— <?php echo htmlspecialchars($returnDesc); ?></span>
-                    </div>
-                </div>
-                
-                <?php if (!empty($selectedNative['comment'])): ?>
-                <div class="detail-section">
-                    <div class="section-title">💬 Comment</div>
-                    <div class="detail-comment"><?php echo nl2br(htmlspecialchars($selectedNative['comment'])); ?></div>
-                </div>
-                <?php endif; ?>
-                
-                <div class="detail-section">
-                    <div class="section-title">ℹ️ Metadata</div>
-                    <div style="display:grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size:13px; color:var(--text-secondary);">
-                        <span style="font-weight:500;">Build:</span>
-                        <span><?php echo htmlspecialchars($selectedNative['build'] ?: 'N/A'); ?></span>
-                        
-                        <?php if (!empty($selectedNative['gta_hash'])): ?>
-                        <span style="font-weight:500;">GTA Hash:</span>
-                        <span><?php echo htmlspecialchars($selectedNative['gta_hash']); ?></span>
-                        <?php endif; ?>
-                        
-                        <?php if (!empty($selectedNative['gta_jhash'])): ?>
-                        <span style="font-weight:500;">GTA JHash:</span>
-                        <span><?php echo htmlspecialchars($selectedNative['gta_jhash']); ?></span>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                
-                <p style="font-size:13px; color:var(--text-muted); margin-top:8px;">Copy Native copies the entire native to clipboard (Ex: Namespace::Native(Ped param1, Hash param2))</p>
-                
-                <div class="detail-actions">
-					<button class="btn" onclick="copyText('<?php echo htmlspecialchars($selectedNative['hash']); ?>')">📋 Copy Hash</button>
-					<button class="btn btn-success" onclick="copyNativeWithParams()">📋 Copy Native (with params)</button>
-					<button class="btn" onclick="copyNativeSignatureOnly()">📋 Copy Signature Only</button>
-				</div>
-
-				<!-- Preview area -->
-				<div class="generate-area">
-					<div class="preview" id="nativePreview">
-						<?php 
-						$previewSignature = formatSignature($selectedNative['name'], $selectedNative['namespace'], $params);
-						echo htmlspecialchars($previewSignature);
-						?>
-					</div>
-					<button class="btn btn-primary" onclick="copyNativeWithParams()">📋 Copy Generated</button>
-				</div>
-            <?php else: ?>
-                <div class="detail-empty">
-                    <div class="icon">🎯</div>
-                    <h2>Select a Native</h2>
-                    <p>Click on any native from the list to view its details here.</p>
-                    <p style="font-size:13px; color:var(--text-muted); margin-top:8px;">Search above to find specific natives.</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-    
-    <div class="toast" id="toast"></div>
-    
-    <script>
-        // Navigation toggle
-        const hamburger = document.getElementById('hamburger');
-        const navOverlay = document.getElementById('navOverlay');
-        const navMobile = document.getElementById('navMobile');
-        
-        function toggleNav() {
-            hamburger.classList.toggle('active');
-            navOverlay.classList.toggle('open');
-            navMobile.classList.toggle('open');
-            document.body.style.overflow = navMobile.classList.contains('open') ? 'hidden' : '';
-        }
-        
-        hamburger.addEventListener('click', toggleNav);
-        navOverlay.addEventListener('click', toggleNav);
-        
-        // Close nav on link click (mobile)
-        document.querySelectorAll('.nav-mobile a').forEach(link => {
-            link.addEventListener('click', () => {
-                if (navMobile.classList.contains('open')) {
-                    toggleNav();
-                }
-            });
-        });
-        
-        // State
-        let searchTimeout = null;
-        let currentSearch = '<?php echo addslashes($search); ?>';
-        let currentNamespace = '<?php echo addslashes($namespace); ?>';
-        let currentPage = <?php echo $page; ?>;
-        
-        // DOM elements
-        const searchInput = document.getElementById('searchInput');
-        const namespaceSelect = document.getElementById('namespaceSelect');
-        const nativeList = document.getElementById('nativeList');
-        const detailPanel = document.getElementById('detailPanel');
-        const resultCount = document.getElementById('resultCount');
-        const listCount = document.getElementById('listCount');
-        const searchClear = document.getElementById('searchClear');
-        const pagination = document.getElementById('pagination');
-        
-        // Debounced search
-        let searchController = null;
-        let searchRequestId = 0;
-
-        async function performSearch() {
-            const searchVal = searchInput.value.trim();
-            const namespaceVal = namespaceSelect.value;
-
-            const params = new URLSearchParams(window.location.search);
-
-            if (searchVal) {
-                params.set('search', searchVal);
-            } else {
-                params.delete('search');
-            }
-
-            if (namespaceVal) {
-                params.set('namespace', namespaceVal);
-            } else {
-                params.delete('namespace');
-            }
-
-            params.set('page', '1');
-            params.set('per_page', '<?php echo $perPage; ?>');
-            params.delete('id');
-
-            const requestId = ++searchRequestId;
-
-            if (searchController) {
-                searchController.abort();
-            }
-
-            searchController = new AbortController();
-
-            const wasFocused = document.activeElement === searchInput;
-            const selectionStart = searchInput.selectionStart;
-            const selectionEnd = searchInput.selectionEnd;
-
-            try {
-                const response = await fetch(
-                    window.location.pathname + '?' + params.toString(),
-                    {
-                        method: 'GET',
-                        credentials: 'same-origin',
-                        cache: 'no-store',
-                        signal: searchController.signal,
-                        headers: {
-                            'X-Requested-With': 'XMLHttpRequest'
-                        }
-                    }
-                );
-
-                if (!response.ok) {
-                    throw new Error('Search request failed: HTTP ' + response.status);
-                }
-
-                const html = await response.text();
-
-                if (requestId !== searchRequestId) {
-                    return;
-                }
-
-                const doc = new DOMParser().parseFromString(html, 'text/html');
-                const newNativeList = doc.getElementById('nativeList');
-
-                if (!newNativeList) {
-                    throw new Error('The search response did not contain #nativeList.');
-                }
-
-                nativeList.innerHTML = newNativeList.innerHTML;
-
-                window.history.replaceState(
-                    null,
-                    '',
-                    window.location.pathname + '?' + params.toString()
-                );
-
-                currentSearch = searchVal;
-                currentNamespace = namespaceVal;
-                currentPage = 1;
-
-                if (wasFocused) {
-                    searchInput.focus({ preventScroll: true });
-
-                    if (selectionStart !== null && selectionEnd !== null) {
-                        const max = searchInput.value.length;
-                        searchInput.setSelectionRange(
-                            Math.min(selectionStart, max),
-                            Math.min(selectionEnd, max)
-                        );
-                    }
-                }
-            } catch (error) {
-                if (error.name !== 'AbortError') {
-                    console.error('Native search failed:', error);
-                    showToast('❌ Search failed. Please try again.');
-                }
-            }
-        }
-
-        searchInput.addEventListener('input', function() {
-            const val = this.value.trim();
-            searchClear.classList.toggle('visible', val.length > 0);
-            
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                performSearch();
-            }, 300);
-        });
-        
-        namespaceSelect.addEventListener('change', function() {
-            performSearch();
-        });
-        
-        function clearSearch() {
-            clearTimeout(searchTimeout);
-            searchInput.value = '';
-            searchClear.classList.remove('visible');
-
-            performSearch().then(() => {
-                searchInput.focus({ preventScroll: true });
-                searchInput.setSelectionRange(0, 0);
-            });
-        }
-
-        function selectNative(id) {
-            const params = new URLSearchParams(window.location.search);
-            params.set('id', id);
-            params.set('page', currentPage);
-            window.location.href = '?' + params.toString();
-        }
-        
-        function copyText(text) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(() => {
-                    showToast('✅ Copied: ' + text.substring(0, 50) + (text.length > 50 ? '...' : ''));
-                }).catch(() => {
-                    fallbackCopy(text);
-                });
-            } else {
-                fallbackCopy(text);
-            }
-        }
-        
-        function fallbackCopy(text) {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            try {
-                document.execCommand('copy');
-                showToast('✅ Copied: ' + text.substring(0, 50) + (text.length > 50 ? '...' : ''));
-            } catch (e) {
-                showToast('❌ Failed to copy');
-            }
-            document.body.removeChild(textarea);
-        }
-        
-        function showToast(message) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.classList.add('show');
-            clearTimeout(toast._timeout);
-            toast._timeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
-        }
-        
-        document.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-                e.preventDefault();
-                searchInput.focus();
-                searchInput.select();
-            }
-            if (e.key === 'Escape' && document.activeElement === searchInput) {
-                clearSearch();
-            }
-        });
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            const activeItem = document.querySelector('.native-item.active');
-            if (activeItem) {
-                activeItem.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            }
-            
-            if (searchInput.value.trim().length > 0) {
-                searchClear.classList.add('visible');
-            }
-        });
-        
-        document.querySelectorAll('.pagination .btn:not([disabled])').forEach(link => {
-            link.addEventListener('click', function(e) {
-                const href = this.getAttribute('href');
-                if (href && href.startsWith('?')) {
-                    e.preventDefault();
-                    const params = new URLSearchParams(href.substring(1));
-                    const currentId = new URLSearchParams(window.location.search).get('id');
-                    if (currentId) {
-                        params.set('id', currentId);
-                    }
-                    window.location.href = '?' + params.toString();
-                }
-            });
-        });
-		let paramValues = {};
-
-		function updateParamPreview() {
-			const inputs = document.querySelectorAll('.param-input');
-			const preview = document.getElementById('nativePreview');
-			const namespace = '<?php echo addslashes($selectedNative['namespace'] ?? ''); ?>';
-			const name = '<?php echo addslashes($selectedNative['name'] ?? ''); ?>';
-			const paramTypes = <?php echo json_encode(array_column($params, 'type')); ?>;
-			const paramNames = <?php echo json_encode(array_column($params, 'name')); ?>;
-			
-			// Collect all parameter values
-			const paramStrings = [];
-			let hasCustomValue = false;
-			
-			inputs.forEach((input, index) => {
-				const value = input.value.trim();
-				const type = paramTypes[index] || '';
-				const name = paramNames[index] || '';
-				
-				if (value) {
-					hasCustomValue = true;
-					paramStrings.push(value);
-					// Store for later use
-					paramValues[index] = value;
-				} else {
-					// Use type-hinted format
-					let defaultValue = '';
-					switch (type) {
-						case 'int':
-						case 'Hash':
-						case 'Entity':
-						case 'Ped':
-						case 'Vehicle':
-						case 'Object':
-						case 'ScrHandle':
-							defaultValue = '0';
-							break;
-						case 'float':
-							defaultValue = '0.0f';
-							break;
-						case 'BOOL':
-							defaultValue = 'false';
-							break;
-						case 'const char*':
-							defaultValue = '"string"';
-							break;
-						case 'Vector3*':
-						case 'Any*':
-						case 'int*':
-						case 'float*':
-							defaultValue = 'NULL';
-							break;
-						default:
-							defaultValue = type || 'value';
-					}
-					paramStrings.push(defaultValue);
-					paramValues[index] = null;
-				}
-			});
-			
-			// Build the signature
-			const signature = namespace + '::' + name + '(' + paramStrings.join(', ') + ')';
-			preview.textContent = signature;
-			
-			// Highlight custom values
-			if (hasCustomValue) {
-				preview.innerHTML = highlightCustomValues(signature, inputs);
-			}
-			
-			// Update UI
-			inputs.forEach((input, index) => {
-				if (input.value.trim()) {
-					input.classList.add('has-value');
-				} else {
-					input.classList.remove('has-value');
-				}
-			});
-		}
-
-		function highlightCustomValues(signature, inputs) {
-			// This is a simple highlight - you can make it more sophisticated
-			let result = signature;
-			inputs.forEach((input, index) => {
-				const value = input.value.trim();
-				if (value) {
-					// Find and highlight the parameter in the signature
-					// This is a simplified approach
-					const parts = result.split(', ');
-					if (parts[index]) {
-						parts[index] = '<span class="highlight-param">' + parts[index] + '</span>';
-						result = parts.join(', ');
-					}
-				}
-			});
-			return result;
-		}
-
-		function applyAllParams() {
-			const inputs = document.querySelectorAll('.param-input');
-			inputs.forEach((input, index) => {
-				const type = input.dataset.type || '';
-				let value = '';
-				switch (type) {
-					case 'int':
-					case 'Hash':
-						value = '0';
-						break;
-					case 'float':
-						value = '0.0f';
-						break;
-					case 'BOOL':
-						value = 'false';
-						break;
-					case 'const char*':
-						value = '"string"';
-						break;
-					case 'Vector3*':
-					case 'Any*':
-						value = 'NULL';
-						break;
-					default:
-						value = type || 'value';
-				}
-				input.value = value;
-				input.classList.add('has-value');
-			});
-			updateParamPreview();
-		}
-
-		function clearAllParams() {
-			const inputs = document.querySelectorAll('.param-input');
-			inputs.forEach(input => {
-				input.value = '';
-				input.classList.remove('has-value');
-			});
-			updateParamPreview();
-		}
-
-		function resetAllParams() {
-			clearAllParams();
-		}
-
-		function resetParam(index) {
-			const input = document.getElementById('param_' + index);
-			if (input) {
-				input.value = '';
-				input.classList.remove('has-value');
-				updateParamPreview();
-			}
-		}
-
-		function copyNativeWithParams() {
-			const preview = document.getElementById('nativePreview');
-			const text = preview.textContent;
-			copyText(text);
-		}
-
-		function copyNativeSignatureOnly() {
-			const namespace = '<?php echo addslashes($selectedNative['namespace'] ?? ''); ?>';
-			const name = '<?php echo addslashes($selectedNative['name'] ?? ''); ?>';
-			const paramTypes = <?php echo json_encode(array_column($params, 'type')); ?>;
-			const paramNames = <?php echo json_encode(array_column($params, 'name')); ?>;
-			
-			let signature = namespace + '::' + name + '(';
-			const paramParts = paramTypes.map((type, index) => {
-				return type + ' ' + paramNames[index];
-			});
-			signature += paramParts.join(', ');
-			signature += ')';
-			
-			copyText(signature);
-		}
-
-		// Initialize the preview
-		document.addEventListener('DOMContentLoaded', function() {
-			// Small delay to ensure DOM is fully loaded
-			setTimeout(updateParamPreview, 100);
-			
-			// Add keyboard shortcut for copying
-			document.addEventListener('keydown', function(e) {
-				if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-					const activeElement = document.activeElement;
-					if (activeElement && activeElement.classList.contains('param-input')) {
-						e.preventDefault();
-						copyNativeWithParams();
-					}
-				}
-			});
-			
-			// Auto-focus first parameter input
-			const firstInput = document.querySelector('.param-input');
-			if (firstInput) {
-				// Don't auto-focus on mobile
-				if (window.innerWidth > 768) {
-					// firstInput.focus();
-				}
-			}
-		});
-    </script>
 </body>
 </html>
