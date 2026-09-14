@@ -120,13 +120,13 @@ The generator allows you to specify command information, required includes, and 
 
 NativeDB database usage is optional.
 
-If you do **not** want to use the databases, set:
+If you do **want** to use the databases, set:
 
 ```php
-define('USE_DATABASE', false);
+define('USE_DATABASE', true);
 ```
 
-in the applicable NativeDB PHP page.
+in the applicable NativeDB PHP page.  Otherwise, the Natives fetch from URL json files (Slower, Less reliable)
 
 If you are using the databases:
 
