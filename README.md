@@ -561,4 +561,4 @@ Contributions that expand support for additional **RAGE Engine games** are espec
 
 The long-term goal of this project is to provide a centralized, free, open-source toolkit for working with **RAGE Engine native functions and development data across Rockstar Games titles**.
 
-From classic RAGE Engine releases to newer games, the project aims to make native research, list manipulation, and mod-menu development easier from a single location.
+From classic RAGE Engine releases to newer games, the project aims to make native research, game development, list manipulation, and mod-menu development easier from a single location.
